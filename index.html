@@ -8417,32 +8417,144 @@ function bindChartInteractions(canvasId) {
   const canvas = document.getElementById(canvasId);
   if (!canvas || canvas._bound) return;
   canvas._bound = true;
+
+  // 工具：根据 zoom/offset 重绘
+  const redraw = () => { const k = canvas._klines; if (k && k.length) drawChart(k, canvasId); };
+
+  // 滚轮缩放（以鼠标位置为锚点，保持鼠标下的K线不动）
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const zs = canvas._zs || (canvas._zs = { zoom: 1, offset: 0 });
+    const oldZoom = zs.zoom;
     const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
-    zs.zoom = Math.max(0.5, Math.min(8, zs.zoom * factor));
-    const klines = canvas._klines;
-    if (klines) drawChart(klines, canvasId);
+    const newZoom = Math.max(0.5, Math.min(8, oldZoom * factor));
+    if (newZoom === oldZoom) return;
+    const allK = canvas._klines;
+    if (!allK || !allK.length) return;
+    const baseCount = 120;
+    const oldVis = Math.max(20, Math.min(allK.length, Math.round(baseCount / oldZoom)));
+    const newVis = Math.max(20, Math.min(allK.length, Math.round(baseCount / newZoom)));
+    const rect = canvas.getBoundingClientRect();
+    // 鼠标在可视区的位置比例（0~1，从右往左：1=最新数据）
+    const ratio = 1 - (e.clientX - rect.left) / rect.width;
+    const oldEnd = allK.length - Math.round(zs.offset);
+    const oldStart = Math.max(0, oldEnd - oldVis);
+    // 鼠标锚点对应的K线全量索引
+    const anchorIdx = oldStart + ratio * oldVis;
+    // 新窗口：让 anchorIdx 保持相同比例位置
+    const newStart = Math.max(0, Math.min(allK.length - newVis, anchorIdx - ratio * newVis));
+    zs.zoom = newZoom;
+    zs.offset = Math.max(0, Math.min(allK.length - newVis, allK.length - (newStart + newVis)));
+    redraw();
   }, { passive: false });
+
+  // 鼠标拖拽平移
   let dragging = false, startX = 0, startOffset = 0;
   canvas.addEventListener('mousedown', (e) => {
-    dragging = true; startX = e.clientX; startOffset = canvas._zs.offset;
+    dragging = true; startX = e.clientX;
+    startOffset = (canvas._zs || (canvas._zs = { zoom: 1, offset: 0 })).offset;
     canvas.style.cursor = 'grabbing';
   });
   window.addEventListener('mousemove', (e) => {
     if (!dragging || !canvas._klines) return;
     const dx = e.clientX - startX;
     const zs = canvas._zs;
-    const visCount = Math.max(20, Math.min(canvas._klines.length, Math.round(120 / zs.zoom)));
-    // 像素dx对应的K线数（反向：向右拖=看更早的数据）
+    const allK = canvas._klines;
+    const visCount = Math.max(20, Math.min(allK.length, Math.round(120 / zs.zoom)));
     const kPerPx = visCount / canvas.getBoundingClientRect().width;
-    zs.offset = Math.max(0, Math.min(canvas._klines.length - visCount, startOffset + dx * kPerPx));
-    drawChart(canvas._klines, canvasId);
+    zs.offset = Math.max(0, Math.min(allK.length - visCount, startOffset + dx * kPerPx));
+    redraw();
   });
   window.addEventListener('mouseup', () => { dragging = false; if (canvas) canvas.style.cursor = 'crosshair'; });
-}
 
+  // 触摸支持：双指捏合缩放 + 单指拖动平移
+  let pinchDist = 0, pinchZoom = 1;
+  let touchStartX = 0, touchStartOffset = 0, touchMoved = false;
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const zs = canvas._zs || (canvas._zs = { zoom: 1, offset: 0 });
+    if (e.touches.length === 2) {
+      // 双指捏合开始
+      pinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                             e.touches[0].clientY - e.touches[1].clientY);
+      pinchZoom = zs.zoom;
+    } else if (e.touches.length === 1) {
+      touchStartX = e.touches[0].clientX;
+      touchStartOffset = zs.offset;
+      touchMoved = false;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const zs = canvas._zs || (canvas._zs = { zoom: 1, offset: 0 });
+    const allK = canvas._klines;
+    if (!allK || !allK.length) return;
+    if (e.touches.length === 2) {
+      // 捏合缩放
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                              e.touches[0].clientY - e.touches[1].clientY);
+      if (pinchDist > 0) {
+        const newZoom = Math.max(0.5, Math.min(8, pinchZoom * (dist / pinchDist)));
+        if (newZoom !== zs.zoom) {
+          zs.zoom = newZoom;
+          redraw();
+        }
+      }
+    } else if (e.touches.length === 1) {
+      // 单指拖动平移
+      const dx = e.touches[0].clientX - touchStartX;
+      if (Math.abs(dx) > 4) touchMoved = true;
+      if (touchMoved) {
+        const visCount = Math.max(20, Math.min(allK.length, Math.round(120 / zs.zoom)));
+        const kPerPx = visCount / canvas.getBoundingClientRect().width;
+        zs.offset = Math.max(0, Math.min(allK.length - visCount, touchStartOffset + dx * kPerPx));
+        redraw();
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    pinchDist = 0;
+    touchMoved = false;
+  }, { passive: false });
+
+  // 悬停提示：鼠标/手指在K线上显示日期+价格
+  let tipEl = document.getElementById('chart-tip');
+  if (!tipEl) {
+    tipEl = document.createElement('div');
+    tipEl.id = 'chart-tip';
+    tipEl.style.cssText = 'position:absolute;pointer-events:none;background:rgba(20,24,30,0.9);color:#e6edf3;font-size:11px;padding:3px 7px;border-radius:4px;border:1px solid #30363d;display:none;z-index:99;white-space:nowrap;';
+    canvas.parentElement.style.position = 'relative';
+    canvas.parentElement.appendChild(tipEl);
+  }
+  const showTip = (e) => {
+    const allK = canvas._klines;
+    if (!allK || !allK.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const zs = canvas._zs || { zoom: 1, offset: 0 };
+    const visCount = Math.max(20, Math.min(allK.length, Math.round(120 / zs.zoom)));
+    const endIdx = allK.length - Math.round(zs.offset);
+    const startIdx = Math.max(0, endIdx - visCount);
+    const cw = rect.width - 66;
+    const ratio = (e.clientX - rect.left - 8) / cw;
+    const ki = Math.max(0, Math.min(visCount - 1, Math.floor(ratio * visCount)));
+    const idx = Math.min(allK.length - 1, startIdx + ki);
+    const k = allK[idx];
+    if (!k) return;
+    tipEl.textContent = k.date + ' 开' + k.open + ' 高' + k.high + ' 低' + k.low + ' 收' + k.close;
+    tipEl.style.left = (e.clientX - rect.left + 12) + 'px';
+    tipEl.style.top = (e.clientY - rect.top - 30) + 'px';
+    tipEl.style.display = 'block';
+  };
+  const hideTip = () => { if (tipEl) tipEl.style.display = 'none'; };
+  canvas.addEventListener('mousemove', showTip);
+  canvas.addEventListener('mouseleave', hideTip);
+  canvas.addEventListener('touchmove', (e) => { if (e.touches.length === 1) showTip(e.touches[0]); });
+  canvas.addEventListener('touchend', hideTip);
+}
 
 // 打开东方财富个股页
 function openEastmoney(ev, code) {
