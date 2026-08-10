@@ -8052,13 +8052,30 @@ function calcSignals(klines, trend, macd, vol, div, score, k60min) {
   if (!above20) sells.push('跌破20日线'+fmtPrice(ma20)+'（短期趋势走弱，减仓观察）反抽'+fmtPrice(ma20)+'不收复则离场');
   if (!above60) sells.push('跌破60日线'+fmtPrice(ma60)+'（中期趋势走弱，回避）下方看'+fmtPrice(low60)+'支撑');
 
-  // 关键价位（近期数据优先：60日通道 + 20日均线）
+  // === 关键价位（修正版）：支撑/压力取现价下方/上方最近的有效价位 ===
+  // 候选支撑：60日线（若在现价下方）、20日低点、60日低点 —— 取其中最接近现价者
+  // 候选压力：60日线（若在现价上方）、20日高点、60日高点 —— 取其中最接近现价者
+  const candSupport = [];
+  if (ma60 !== null && ma60 < close) candSupport.push({ v: ma60, tag: '60日线' });
+  candSupport.push({ v: low20, tag: '20日低点' });
+  candSupport.push({ v: low60, tag: '60日低点' });
+  const candResist = [];
+  if (ma60 !== null && ma60 > close) candResist.push({ v: ma60, tag: '60日线' });
+  candResist.push({ v: high20, tag: '20日高点' });
+  candResist.push({ v: high60, tag: '60日高点' });
+  // 距现价最近的支撑（取最大者=最接近现价的下方价位）
+  const bestSupport = candSupport.reduce((a, b) => (b.v > a.v ? b : a), { v: -Infinity });
+  // 距现价最近的压力（取最小者=最接近现价的上方价位）
+  const bestResist = candResist.reduce((a, b) => (b.v < a.v ? b : a), { v: Infinity });
+  // 止损：现价下方最近支撑再下方一点（3%缓冲），避免贴着支撑
+  const stopPrice = bestSupport.v > 0 ? bestSupport.v * 0.97 : close * 0.93;
+
   const levels = {
-    strongSupport: Math.min(low60, ma60 !== null ? ma60 : low60), // 强支撑：60日低点或60日线（更贴近现价）
-    support: trend.low20,           // 短期支撑：20日低点
-    resist: trend.high20,           // 短期压力：20日高点
-    strongResist: high60,           // 强压力：60日高点（不再用120日陈旧数据）
-    stop: Math.min(trend.low20, ma60 !== null ? ma60 : low60) * 0.97  // 止损参考
+    strongSupport: bestSupport.v,   // 强支撑：现价下方最近的支撑（如60日线/20日低点）
+    support: low20,                 // 短期支撑：20日低点
+    resist: high20,                 // 短期压力：20日高点
+    strongResist: bestResist.v,     // 强压力：现价上方最近的压力
+    stop: stopPrice                 // 止损参考：支撑下方3%
   };
   return { buys, sells, levels, chgFromLow, channelPos, low60, high60 };
 }
@@ -8582,6 +8599,29 @@ async function analyze(code) {
     if (quote && quote.name) { news2 = await getNews(quote.name); }
     $('loadingText').textContent = '数据完成，开始五层分析…';
     await new Promise(r => setTimeout(r, 50));
+
+    // === 当日K线合成：同花顺日K盘中不更新，用腾讯实时行情补今日K线 ===
+    if (quote && quote.price && quote.date) {
+      const qd = String(quote.date).replace(/[-\/]/g, '');
+      const lastK = klines[klines.length - 1];
+      const todayStr = qd.substring(0, 8);
+      if (lastK && lastK.date !== todayStr) {
+        klines.push({
+          date: todayStr,
+          open: quote.open || lastK.close,
+          high: Math.max(quote.high || quote.price, quote.price, lastK.close),
+          low: Math.min(quote.low || quote.price, quote.price, lastK.close),
+          close: quote.price,
+          vol: quote.vol || 0,
+          amount: quote.amount || 0
+        });
+      } else if (lastK && lastK.date === todayStr && quote.price > 0) {
+        // 已是今日：用实时价刷新
+        lastK.close = quote.price;
+        lastK.high = Math.max(lastK.high, quote.high || quote.price);
+        lastK.low = Math.min(lastK.low, quote.low || quote.price);
+      }
+    }
 
     const trend = analyzeTrend(klines);
     const macdData = calcMACD(klines);
