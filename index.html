@@ -8219,47 +8219,21 @@ function linreg(points) {
 // 徐小明趋势通道：上升趋势=重要低点连线，下降趋势=重要高点连线，平行线为通道
 // 返回 { upLine, downLine } 每条线 {slope, intercept, x0, x1, points}
 function calcXuxiaomingChannel(klines) {
-  const N = klines.length;
-  const pivots = findPivots(klines, 4, 4, 0.02);
-  const lows = pivots.filter(p => p.type === 'low').slice(-6);
-  const highs = pivots.filter(p => p.type === 'high').slice(-6);
-  // 上升趋势线：取最近的重要低点连线（至少2个点，用线性拟合，斜率>0才有效）
-  let upLine = null;
-  if (lows.length >= 2) {
-    const pts = lows.map(p => ({ x: p.idx, y: p.price }));
-    // 选最近3个低点做拟合，过滤异常点
-    const recent = pts.slice(-3);
-    let best = null;
-    for (let i = 0; i < recent.length - 1; i++) {
-      for (let j = i + 1; j < recent.length; j++) {
-        const slope = (recent[j].y - recent[i].y) / (recent[j].x - recent[i].x);
-        if (slope <= 0) continue; // 上升趋势线要求斜率为正
-        // 计算其它点对该线的贴合度
-        let fit = 0;
-        recent.forEach(p => { fit += Math.abs(p.y - (recent[i].y + slope * (p.x - recent[i].x))); });
-        if (!best || fit < best.fit) best = { slope, intercept: recent[i].y - slope * recent[i].x, fit, points: recent };
-      }
-    }
-    if (best) upLine = { ...best, x0: Math.min(...best.points.map(p => p.x)), x1: Math.max(...best.points.map(p => p.x)) };
-  }
-  // 下降趋势线：取最近的重要高点连线（斜率<0才有效）
-  let downLine = null;
-  if (highs.length >= 2) {
-    const pts = highs.map(p => ({ x: p.idx, y: p.price }));
-    const recent = pts.slice(-3);
-    let best = null;
-    for (let i = 0; i < recent.length - 1; i++) {
-      for (let j = i + 1; j < recent.length; j++) {
-        const slope = (recent[j].y - recent[i].y) / (recent[j].x - recent[i].x);
-        if (slope >= 0) continue; // 下降趋势线要求斜率为负
-        let fit = 0;
-        recent.forEach(p => { fit += Math.abs(p.y - (recent[i].y + slope * (p.x - recent[i].x))); });
-        if (!best || fit < best.fit) best = { slope, intercept: recent[i].y - slope * recent[i].x, fit, points: recent };
-      }
-    }
-    if (best) downLine = { ...best, x0: Math.min(...best.points.map(p => p.x)), x1: Math.max(...best.points.map(p => p.x)) };
-  }
-  return { upLine, downLine, pivots };
+  // 徐小明多空通道标准算法
+  // 短轨：EMA(H,26) / EMA(L,26)；长轨：EMA(H,89) / EMA(L,89)
+  const ema = (arr, n) => {
+    const k = 2 / (n + 1);
+    let ema = arr[0];
+    return arr.map(v => { ema = v * k + ema * (1 - k); return ema; });
+  };
+  const closes = klines.map(k => k.close);
+  const highs = klines.map(k => k.high);
+  const lows = klines.map(k => k.low);
+  const emaH26 = ema(highs, 26);
+  const emaL26 = ema(lows, 26);
+  const emaH89 = ema(highs, 89);
+  const emaL89 = ema(lows, 89);
+  return { shortUpper: emaH26, shortLower: emaL26, longUpper: emaH89, longLower: emaL89 };
 }
 
 function drawChart(klines, canvasId) {
@@ -8304,59 +8278,69 @@ function drawChart(klines, canvasId) {
     ctx.fillText(val.toFixed(2), W - padR + 4, yy + 3);
   }
 
-  // ===== 徐小明趋势通道（全量数据计算，含可视区外，保证线连续性）=====
+  // ===== 徐小明多空通道（EMA26/89 标准双轨）=====
+  // 预计算 EMA（用于可视区内外全量数据）
   const chan = calcXuxiaomingChannel(allK);
-  const lineAt = (line, i) => line ? line.intercept + line.slope * i : null;
+  const su = chan.shortUpper, sl = chan.shortLower, lu = chan.longUpper, ll = chan.longLower;
 
-  // 上升趋势线（蓝实线）+ 平行通道（铁轨）
-  if (chan.upLine) {
-    const L = chan.upLine;
-    const x0 = Math.max(startIdx - 10, 0), x1 = Math.min(endIdx + 5, allK.length - 1);
-    // 趋势线（过拟合点的实线）
-    ctx.strokeStyle = '#388bfd'; ctx.lineWidth = 1.6; ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1))); ctx.stroke();
-    // 平行通道：过最近低点做平行线（铁轨下轨），以及过最新价投影的上轨
-    const lastLow = chan.pivots.filter(p => p.type === 'low').slice(-1)[0];
-    if (lastLow) {
-      const pIntercept = lastLow.price - L.slope * lastLow.idx;
-      // 下轨（过最近重要低点）
-      ctx.strokeStyle = 'rgba(56,139,253,0.45)'; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
-      ctx.beginPath(); ctx.moveTo(x(x0), y(pIntercept + L.slope * x0)); ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.stroke();
-      ctx.setLineDash([]);
-      // 轨道间填充
-      ctx.fillStyle = 'rgba(56,139,253,0.06)';
-      ctx.beginPath();
-      ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1)));
-      ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.lineTo(x(x0), y(pIntercept + L.slope * x0));
-      ctx.closePath(); ctx.fill();
-      // 标注
-      ctx.fillStyle = '#388bfd'; ctx.font = 'bold 9px sans-serif';
-      ctx.fillText('上升趋势线 ' + lineAt(L, endIdx - 1).toFixed(2), padL + 2, y(lineAt(L, endIdx - 1)) - 4);
+  // 绘制填充区域（背景层，先画）
+  // 短轨填充：C>短上轨→红色，C<短下轨→绿色（只在可视区绘制）
+  data.forEach((k, i) => {
+    const gi = startIdx + i; // 全量索引
+    const sy = y(su[gi]), sly = y(sl[gi]);
+    if (k.close > su[gi]) {
+      ctx.fillStyle = 'rgba(220,60,60,0.12)'; // 红色填充（多头）
+      ctx.fillRect(x(startIdx + i), Math.min(sy, sly), cw / data.length, Math.abs(sy - sly) + 1);
+    } else if (k.close < sl[gi]) {
+      ctx.fillStyle = 'rgba(50,200,80,0.12)'; // 绿色填充（空头）
+      ctx.fillRect(x(startIdx + i), Math.min(sy, sly), cw / data.length, Math.abs(sy - sly) + 1);
     }
-  }
-  // 下降趋势线（红实线）+ 平行通道
-  if (chan.downLine) {
-    const L = chan.downLine;
-    const x0 = Math.max(startIdx - 10, 0), x1 = Math.min(endIdx + 5, allK.length - 1);
-    ctx.strokeStyle = '#d93a2f'; ctx.lineWidth = 1.6; ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1))); ctx.stroke();
-    const lastHigh = chan.pivots.filter(p => p.type === 'high').slice(-1)[0];
-    if (lastHigh) {
-      const pIntercept = lastHigh.price - L.slope * lastHigh.idx;
-      ctx.strokeStyle = 'rgba(217,58,47,0.45)'; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
-      ctx.beginPath(); ctx.moveTo(x(x0), y(pIntercept + L.slope * x0)); ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(217,58,47,0.06)';
-      ctx.beginPath();
-      ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1)));
-      ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.lineTo(x(x0), y(pIntercept + L.slope * x0));
-      ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#d93a2f'; ctx.font = 'bold 9px sans-serif';
-      ctx.fillText('下降趋势线 ' + lineAt(L, endIdx - 1).toFixed(2), padL + 2, y(lineAt(L, endIdx - 1)) - 4);
-    }
-  }
+  });
 
-  // K线柱体
+  // 长轨填充（更淡）
+  data.forEach((k, i) => {
+    const gi = startIdx + i;
+    const ly = y(lu[gi]), lly = y(ll[gi]);
+    if (k.close > lu[gi]) {
+      ctx.fillStyle = 'rgba(180,50,180,0.07)';
+      ctx.fillRect(x(startIdx + i), Math.min(ly, lly), cw / data.length, Math.abs(ly - lly) + 1);
+    } else if (k.close < ll[gi]) {
+      ctx.fillStyle = 'rgba(50,80,200,0.07)';
+      ctx.fillRect(x(startIdx + i), Math.min(ly, lly), cw / data.length, Math.abs(ly - lly) + 1);
+    }
+  });
+
+  // 绘制轨道线（上层）
+  // 短上轨 EMA(H,26) 红色
+  ctx.strokeStyle = '#dc3c3c'; ctx.lineWidth = 1.4; ctx.setLineDash([]);
+  ctx.beginPath();
+  data.forEach((k, i) => { const gi = startIdx + i; if (i === 0) ctx.moveTo(x(startIdx + i), y(su[gi])); else ctx.lineTo(x(startIdx + i), y(su[gi])); });
+  ctx.stroke();
+  // 短下轨 EMA(L,26) 绿色
+  ctx.strokeStyle = '#32c850'; ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  data.forEach((k, i) => { const gi = startIdx + i; if (i === 0) ctx.moveTo(x(startIdx + i), y(sl[gi])); else ctx.lineTo(x(startIdx + i), y(sl[gi])); });
+  ctx.stroke();
+  // 长上轨 EMA(H,89) 品红
+  ctx.strokeStyle = '#b432b4'; ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  data.forEach((k, i) => { const gi = startIdx + i; if (i === 0) ctx.moveTo(x(startIdx + i), y(lu[gi])); else ctx.lineTo(x(startIdx + i), y(lu[gi])); });
+  ctx.stroke();
+  // 长下轨 EMA(L,89) 蓝色
+  ctx.strokeStyle = '#3250c8'; ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  data.forEach((k, i) => { const gi = startIdx + i; if (i === 0) ctx.moveTo(x(startIdx + i), y(ll[gi])); else ctx.lineTo(x(startIdx + i), y(ll[gi])); });
+  ctx.stroke();
+
+  // 右侧标注
+  const lastGi = allK.length - 1;
+  ctx.font = 'bold 9px sans-serif';
+  ctx.fillStyle = '#dc3c3c'; ctx.fillText('短上轨 ' + su[lastGi].toFixed(2), W - padR + 2, y(su[lastGi]) + 3);
+  ctx.fillStyle = '#32c850'; ctx.fillText('短下轨 ' + sl[lastGi].toFixed(2), W - padR + 2, y(sl[lastGi]) + 3);
+  ctx.fillStyle = '#b432b4'; ctx.fillText('长上轨 ' + lu[lastGi].toFixed(2), W - padR + 2, y(lu[lastGi]) + 3);
+  ctx.fillStyle = '#3250c8'; ctx.fillText('长下轨 ' + ll[lastGi].toFixed(2), W - padR + 2, y(ll[lastGi]) + 3);
+
+// K线柱体
   data.forEach((k, i) => {
     const up = k.close >= k.open;
     ctx.strokeStyle = up ? '#f85149' : '#3fb950';
