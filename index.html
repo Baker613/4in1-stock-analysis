@@ -8056,30 +8056,76 @@ function calcSignals(klines, trend, macd, vol, div, score, k60min) {
   if (!above20) sells.push('跌破20日线'+fmtPrice(ma20)+'（短期趋势走弱，减仓观察）反抽'+fmtPrice(ma20)+'不收复则离场');
   if (!above60) sells.push('跌破60日线'+fmtPrice(ma60)+'（中期趋势走弱，回避）下方看'+fmtPrice(low60)+'支撑');
 
-  // === 关键价位（修正版）：支撑/压力取现价下方/上方最近的有效价位 ===
-  // 候选支撑：60日线（若在现价下方）、20日低点、60日低点 —— 取其中最接近现价者
-  // 候选压力：60日线（若在现价上方）、20日高点、60日高点 —— 取其中最接近现价者
-  const candSupport = [];
-  if (ma60 !== null && ma60 < close) candSupport.push({ v: ma60, tag: '60日线' });
-  candSupport.push({ v: low20, tag: '20日低点' });
-  candSupport.push({ v: low60, tag: '60日低点' });
-  const candResist = [];
-  if (ma60 !== null && ma60 > close) candResist.push({ v: ma60, tag: '60日线' });
-  candResist.push({ v: high20, tag: '20日高点' });
-  candResist.push({ v: high60, tag: '60日高点' });
-  // 距现价最近的支撑（取最大者=最接近现价的下方价位）
-  const bestSupport = candSupport.reduce((a, b) => (b.v > a.v ? b : a), { v: -Infinity });
-  // 距现价最近的压力（取最小者=最接近现价的上方价位）
-  const bestResist = candResist.reduce((a, b) => (b.v < a.v ? b : a), { v: Infinity });
-  // 止损：现价下方最近支撑再下方一点（3%缓冲），避免贴着支撑
-  const stopPrice = bestSupport.v > 0 ? bestSupport.v * 0.97 : close * 0.93;
-
+  // === 关键价位（2026-08-10 黄金分割升级版）：波段高低点 + 斐波那契回撤/反弹位 + 近期区间 ===
+  // 设计：识别最近波段 → 黄金分割位(0.382/0.5/0.618) → 结合20/60日区间与均线，取贴近现价的有效价位
+  const round2f = v => Math.round(v * 100) / 100;
+  // 找最近波段高低点（左边2根确认，最后一根无需右边确认，保证上涨/下跌途中的最新极值也能识别）
+  const findPivotF = (type) => {
+    const start = Math.max(2, n - 250);
+    for (let i = n - 1; i >= start; i--) {
+      const k = klines[i];
+      if (type === 'high' && k.high > klines[i-1].high && k.high > klines[i-2].high) {
+        if (i >= n - 1 || k.high > klines[i+1].high) return { price: k.high, idx: i };
+      }
+      if (type === 'low' && k.low < klines[i-1].low && k.low < klines[i-2].low) {
+        if (i >= n - 1 || k.low < klines[i+1].low) return { price: k.low, idx: i };
+      }
+    }
+    return null;
+  };
+  const pivotH = findPivotF('high'), pivotL = findPivotF('low');
+  const inRangeF = v => v > 0 && v > close * 0.75 && v < close * 1.25;
+  let fibLevels = [];
+  if (pivotH && pivotL) {
+    const higher = pivotH.idx > pivotL.idx ? pivotH : pivotL;
+    const lower = pivotH.idx > pivotL.idx ? pivotL : pivotH;
+    const range = higher.price - lower.price;
+    if (range > 0) {
+      if (pivotL.idx > pivotH.idx) fibLevels = [0.382, 0.5, 0.618].map(r => round2f(lower.price + range * r));
+      else fibLevels = [0.382, 0.5, 0.618].map(r => round2f(higher.price - range * r));
+    }
+  }
+  const isDown = pivotH && pivotL && pivotL.idx > pivotH.idx;
+  const isUp = pivotH && pivotL && pivotH.idx > pivotL.idx;
+  const pivotOk = p => p && p.idx > n - 130;
+  let supArr = [], resArr = [];
+  if (isDown) {
+    if (pivotOk(pivotL)) supArr.push(pivotL.price);
+    fibLevels.forEach(v => { if (inRangeF(v) && v < close) supArr.push(v); });
+    fibLevels.forEach(v => { if (inRangeF(v) && v > close) resArr.push(v); });
+    if (low20 > close * 0.75 && low20 < close) supArr.push(low20);
+    if (high20 && inRangeF(high20) && high20 > close) resArr.push(high20);
+    if (ma20 && inRangeF(ma20) && ma20 < close) supArr.push(ma20);
+    if (ma60 && inRangeF(ma60) && ma60 < close) supArr.push(ma60);
+  } else if (isUp) {
+    if (pivotOk(pivotH)) resArr.push(pivotH.price);
+    fibLevels.forEach(v => { if (inRangeF(v) && v < close) supArr.push(v); });
+    fibLevels.forEach(v => { if (inRangeF(v) && v > close) resArr.push(v); });
+    if (pivotOk(pivotL)) supArr.push(pivotL.price);
+    if (low20 > close * 0.75 && low20 < close) supArr.push(low20);
+    if (high20 && inRangeF(high20) && high20 > close) resArr.push(high20);
+    if (ma20 && inRangeF(ma20) && ma20 < close) supArr.push(ma20);
+    if (ma60 && inRangeF(ma60) && ma60 < close) supArr.push(ma60);
+  } else {
+    if (low20 > close * 0.75 && low20 < close) supArr.push(low20);
+    if (high20 && inRangeF(high20) && high20 > close) resArr.push(high20);
+    if (ma20 && inRangeF(ma20) && ma20 < close) supArr.push(ma20);
+    if (ma60 && inRangeF(ma60) && ma60 < close) supArr.push(ma60);
+  }
+  if (!supArr.length && ma20 && inRangeF(ma20)) supArr.push(ma20);
+  if (!supArr.length) supArr.push(round2f(close * 0.95));
+  if (!resArr.length && high20 && inRangeF(high20)) resArr.push(high20);
+  if (!resArr.length) resArr.push(round2f(close * 1.05));
+  const uniqF = arr => [...new Set(arr.map(v => round2f(v)))].sort((a, b) => a - b);
+  supArr = uniqF(supArr);
+  resArr = uniqF(resArr).reverse();
   const levels = {
-    strongSupport: low60,          // 强支撑：60日低点（中期底线）
-    support: low20,                // 短期支撑：20日低点（波段低点）
-    resist: high20,                // 短期压力：20日高点（波段高点）
-    strongResist: high60,          // 强压力：60日高点（中期压力）
-    stop: low60 * 0.97             // 止损参考：强支撑下方3%
+    strongSupport: (low60 > 0 && low60 < close) ? round2f(low60) : (supArr.length ? supArr[0] : round2f(close * 0.9)), // 强支撑：60日低点（中期底线）
+    support: supArr.length ? supArr[supArr.length - 1] : null,     // 短期支撑：黄金分割/均线/近期低点中最贴近现价的
+    resist: resArr.length ? resArr[0] : null,                      // 短期压力：黄金分割/均线/近期高点中最贴近现价的
+    strongResist: (high60 > close) ? round2f(high60) : (resArr.length ? resArr[resArr.length - 1] : round2f(close * 1.1)), // 强压力：60日高点
+    stop: round2f((supArr.length ? supArr[supArr.length - 1] : close * 0.9) * 0.97), // 止损：最近支撑下方3%
+    fibLevels
   };
   return { buys, sells, levels, chgFromLow, channelPos, low60, high60 };
 }
@@ -8138,12 +8184,13 @@ function renderResult(data, container) {
     ${data.signals.sells.length ? data.signals.sells.map(s => `<div class="signal sell-signal">🔴 ${s}</div>`).join('') : '<div class="signal">当前无明显卖点信号——趋势未破，可继续持有（徐小明：趋势为王）</div>'}
     <h4>📌 关键价位</h4>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:6px">
-      <div class="level-box"><div class="q-label">强支撑(60日低点)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.strongSupport)}</div></div>
-      <div class="level-box"><div class="q-label">短期支撑(20日低点)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.support)}</div></div>
-      <div class="level-box"><div class="q-label">短期压力(20日高点)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.resist)}</div></div>
-      <div class="level-box"><div class="q-label">强压力(60日高点)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.strongResist)}</div></div>
-      <div class="level-box"><div class="q-label">止损参考(强支撑下方3%)</div><div class="q-val" style="color:var(--gold)">${fmtPrice(data.signals.levels.stop)}</div></div>
+      <div class="level-box"><div class="q-label">强支撑(60日低/波段)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.strongSupport)}</div></div>
+      <div class="level-box"><div class="q-label">短期支撑(黄金/均线)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.support)}</div></div>
+      <div class="level-box"><div class="q-label">短期压力(黄金/近期高)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.resist)}</div></div>
+      <div class="level-box"><div class="q-label">强压力(60日高/波段)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.strongResist)}</div></div>
+      <div class="level-box"><div class="q-label">止损参考(支撑下方3%)</div><div class="q-val" style="color:var(--gold)">${fmtPrice(data.signals.levels.stop)}</div></div>
     </div>
+    ${data.signals.levels.fibLevels && data.signals.levels.fibLevels.length ? `<div style="margin-top:6px;font-size:0.85em;color:var(--muted)">📐 黄金分割位：${data.signals.levels.fibLevels.map(f => fmtPrice(f)).join(' / ')}（波段高低点斐波那契回撤/反弹位）</div>` : ''}
     <div style="margin-top:8px;font-size:0.85em;color:var(--muted)">📏 波段位置：距120日低点 ${data.signals.chgFromLow.toFixed(0)}% · 通道位置 ${(data.signals.channelPos*100).toFixed(0)}%（0=下轨 100=上轨）</div>
     ` : '<div class="signal">信号数据缺失</div>'}
   </div>
@@ -8651,6 +8698,9 @@ async function analyze(code) {
     ];
 
     const signals = calcSignals(klines, trend, macdData, vol, divergence, score, k60m);
+    const lv = signals.levels || {};
+    const fibTxt = lv.fibLevels && lv.fibLevels.length ? '；黄金分割位 ' + lv.fibLevels.map(f => fmtPrice(f)).join('/') : '';
+    suggestions[3].content = '短期支撑 ' + fmtPrice(lv.support) + ' / 短期压力 ' + fmtPrice(lv.resist) + '；强支撑 ' + fmtPrice(lv.strongSupport) + ' / 强压力 ' + fmtPrice(lv.strongResist) + '；止损参考 ' + fmtPrice(lv.stop) + fibTxt + '。支撑位附近可试探，破位则止损。';
 
     renderResult({
       quote: quoteData, trend, macd: divergence, volume: vol, finance, news: news2,
