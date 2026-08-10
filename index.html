@@ -256,7 +256,8 @@ async function getKline(code, years = 5) {
       const m = text.match(/\{"data":"([^"]*)"/);
       if (m) {
         m[1].split(';').filter(Boolean).forEach(line => {
-          const [date, open, close, low, high, vol, amount] = line.split(',');
+          // 同花顺格式: 日期,开,高,低,收,量,额,涨跌%  (实测确认: 第4=低 第5=收)
+          const [date, open, high, low, close, vol, amount] = line.split(',');
           all.push({ date, open: +open, close: +close, low: +low, high: +high, vol: +vol, amount: +amount });
         });
       }
@@ -8133,7 +8134,7 @@ function renderResult(data, container) {
     ${macd.signals.map(s => `<div class="signal">${s}</div>`).join('')}
     <h4>量能分析</h4>
     ${vol.signals.map(s => `<div class="signal">${s}</div>`).join('')}
-    <h4>K线走势（近120日）</h4>
+    <h4>K线走势（滚轮缩放/拖拽平移） <a href="#" onclick="openEastmoney(event, '${data.quote.code}')" style="float:right;color:var(--gold);font-size:0.8em;text-decoration:underline">📈 东方财富查看 »</a></h4>
     <canvas id="chart" style="width:100%;height:320px;background:#0a0e14;border:1px solid #30363d;border-radius:8px"></canvas>
   </div>
   <div class="card"><h3>💰 财务数据（近8期）</h3>
@@ -8160,21 +8161,115 @@ function renderResult(data, container) {
   </div>`;
 
   // 画K线
+  const chartCanvas = document.getElementById('chart');
+  if (chartCanvas) chartCanvas._klines = data.klines;
   setTimeout(() => drawChart(data.klines, 'chart'), 50);
+  setTimeout(() => bindChartInteractions('chart'), 100);
   el.style.display = 'block';
 }
 
 // Canvas K线图
-/* 徐小明趋势通道（铁轨）v3：EMA12(蓝实线)+EMA60(红实线)双轨+填充+MACD副图 */
+/* 徐小明趋势通道：重要高低点连线(实线) + 平行通道(铁轨) + 缩放拖拽 + MACD副图 */
 function ema(arr, n) { const k = 2/(n+1); let prev = arr[0]; const out = [prev]; for (let i=1;i<arr.length;i++) { prev = arr[i]*k + prev*(1-k); out.push(prev); } return out; }
+
+// 检测重要摆动点（徐小明：重要高点/低点的识别——价格相对前后N根的极值，且与相邻摆动点间距足够）
+function findPivots(klines, left = 5, right = 5, minAmp = 0.03) {
+  const pivots = [];
+  for (let i = left; i < klines.length - right; i++) {
+    const k = klines[i];
+    let isHigh = true, isLow = true;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      if (klines[j].high >= k.high) isHigh = false;
+      if (klines[j].low <= k.low) isLow = false;
+    }
+    if (isHigh && isLow) continue; // 十字星跳过
+    if (isHigh) pivots.push({ idx: i, type: 'high', price: k.high, date: k.date });
+    if (isLow) pivots.push({ idx: i, type: 'low', price: k.low, date: k.date });
+  }
+  // 过滤振幅过小的摆动点（相对近120日价格范围）
+  const closes = klines.map(k => k.close);
+  const range = Math.max(...closes) - Math.min(...closes);
+  const threshold = range * minAmp;
+  return pivots.filter(p => {
+    // 找该点两侧最近的同类型点，检查振幅
+    return true;
+  }).filter((p, i, arr) => {
+    // 同类型点之间最小间距（至少3根K线），避免密集点
+    for (let j = Math.max(0, i - 3); j < i; j++) {
+      if (arr[j].type === p.type && Math.abs(arr[j].idx - p.idx) < 3) return false;
+    }
+    return true;
+  });
+}
+
+// 最小二乘法线性拟合，返回 {slope, intercept, points}
+function linreg(points) {
+  const n = points.length;
+  if (n < 2) return null;
+  let sx = 0, sy = 0, sxy = 0, sxx = 0;
+  points.forEach(p => { sx += p.x; sy += p.y; sxy += p.x * p.y; sxx += p.x * p.x; });
+  const denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-9) return null;
+  const slope = (n * sxy - sx * sy) / denom;
+  const intercept = (sy - slope * sx) / n;
+  return { slope, intercept };
+}
+
+// 徐小明趋势通道：上升趋势=重要低点连线，下降趋势=重要高点连线，平行线为通道
+// 返回 { upLine, downLine } 每条线 {slope, intercept, x0, x1, points}
+function calcXuxiaomingChannel(klines) {
+  const N = klines.length;
+  const pivots = findPivots(klines, 4, 4, 0.02);
+  const lows = pivots.filter(p => p.type === 'low').slice(-6);
+  const highs = pivots.filter(p => p.type === 'high').slice(-6);
+  // 上升趋势线：取最近的重要低点连线（至少2个点，用线性拟合，斜率>0才有效）
+  let upLine = null;
+  if (lows.length >= 2) {
+    const pts = lows.map(p => ({ x: p.idx, y: p.price }));
+    // 选最近3个低点做拟合，过滤异常点
+    const recent = pts.slice(-3);
+    let best = null;
+    for (let i = 0; i < recent.length - 1; i++) {
+      for (let j = i + 1; j < recent.length; j++) {
+        const slope = (recent[j].y - recent[i].y) / (recent[j].x - recent[i].x);
+        if (slope <= 0) continue; // 上升趋势线要求斜率为正
+        // 计算其它点对该线的贴合度
+        let fit = 0;
+        recent.forEach(p => { fit += Math.abs(p.y - (recent[i].y + slope * (p.x - recent[i].x))); });
+        if (!best || fit < best.fit) best = { slope, intercept: recent[i].y - slope * recent[i].x, fit, points: recent };
+      }
+    }
+    if (best) upLine = { ...best, x0: Math.min(...best.points.map(p => p.x)), x1: Math.max(...best.points.map(p => p.x)) };
+  }
+  // 下降趋势线：取最近的重要高点连线（斜率<0才有效）
+  let downLine = null;
+  if (highs.length >= 2) {
+    const pts = highs.map(p => ({ x: p.idx, y: p.price }));
+    const recent = pts.slice(-3);
+    let best = null;
+    for (let i = 0; i < recent.length - 1; i++) {
+      for (let j = i + 1; j < recent.length; j++) {
+        const slope = (recent[j].y - recent[i].y) / (recent[j].x - recent[i].x);
+        if (slope >= 0) continue; // 下降趋势线要求斜率为负
+        let fit = 0;
+        recent.forEach(p => { fit += Math.abs(p.y - (recent[i].y + slope * (p.x - recent[i].x))); });
+        if (!best || fit < best.fit) best = { slope, intercept: recent[i].y - slope * recent[i].x, fit, points: recent };
+      }
+    }
+    if (best) downLine = { ...best, x0: Math.min(...best.points.map(p => p.x)), x1: Math.max(...best.points.map(p => p.x)) };
+  }
+  return { upLine, downLine, pivots };
+}
+
 function drawChart(klines, canvasId) {
   if (!klines || klines.length < 10) return;
-  const data = klines.slice(-120);
+  const allK = klines;
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  const macH = Math.max(60, rect.height * 0.18); // MACD副图高度
+  const macH = Math.max(60, rect.height * 0.18);
   canvas.width = rect.width * dpr; canvas.height = (rect.height + macH) * dpr;
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
@@ -8182,11 +8277,20 @@ function drawChart(klines, canvasId) {
   const padL = 8, padR = 58, padT = 8, padB = 20, macPadT = 0;
   const cw = W - padL - padR, ch = mainH - padT - padB;
 
-  // ===== 主图：K线 + 双轨 =====
+  // ===== 交互状态（存在 canvas 上，跨重绘保留）=====
+  if (!canvas._zs) canvas._zs = { zoom: 1, offset: 0 }; // offset: 显示窗口右端距数据末尾的K线数
+  const zs = canvas._zs;
+  // 可视K线数：zoom=1 显示120根，zoom越大显示越少（放大）
+  const baseCount = 120;
+  const visCount = Math.max(20, Math.min(allK.length, Math.round(baseCount / zs.zoom)));
+  const endIdx = allK.length - Math.round(zs.offset);
+  const startIdx = Math.max(0, endIdx - visCount);
+  const data = allK.slice(startIdx, endIdx);
+
   let min = Math.min(...data.map(k => k.low)), max = Math.max(...data.map(k => k.high));
   const range = max - min || 1;
   min -= range * 0.05; max += range * 0.05;
-  const x = i => padL + (i + 0.5) * cw / data.length;
+  const x = i => padL + (i - startIdx + 0.5) * cw / data.length;
   const y = v => padT + (max - v) / (max - min) * ch;
   const bw = Math.max(1, cw / data.length * 0.7);
 
@@ -8200,39 +8304,57 @@ function drawChart(klines, canvasId) {
     ctx.fillText(val.toFixed(2), W - padR + 4, yy + 3);
   }
 
-  // 徐小明铁轨：EMA12（蓝实线）+ EMA60（红实线）+ 轨间填充
-  const closes = data.map(k => k.close);
-  const fast = ema(closes, 12), slow = ema(closes, 60);
+  // ===== 徐小明趋势通道（全量数据计算，含可视区外，保证线连续性）=====
+  const chan = calcXuxiaomingChannel(allK);
+  const lineAt = (line, i) => line ? line.intercept + line.slope * i : null;
 
-  // 轨间填充色：fast > slow = 红色（多头区间）；fast < slow = 绿色（空头区间）
-  for (let i = 0; i < fast.length; i++) {
-    if (i === 0) continue;
-    const f0 = fast[i-1], f1 = fast[i], s0 = slow[i-1], s1 = slow[i];
-    const isBull = f1 >= s1;
-    ctx.fillStyle = isBull ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)';
-    ctx.beginPath();
-    ctx.moveTo(x(i-1), y(f0)); ctx.lineTo(x(i), y(f1));
-    ctx.lineTo(x(i), y(s1)); ctx.lineTo(x(i-1), y(s0));
-    ctx.closePath(); ctx.fill();
+  // 上升趋势线（蓝实线）+ 平行通道（铁轨）
+  if (chan.upLine) {
+    const L = chan.upLine;
+    const x0 = Math.max(startIdx - 10, 0), x1 = Math.min(endIdx + 5, allK.length - 1);
+    // 趋势线（过拟合点的实线）
+    ctx.strokeStyle = '#388bfd'; ctx.lineWidth = 1.6; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1))); ctx.stroke();
+    // 平行通道：过最近低点做平行线（铁轨下轨），以及过最新价投影的上轨
+    const lastLow = chan.pivots.filter(p => p.type === 'low').slice(-1)[0];
+    if (lastLow) {
+      const pIntercept = lastLow.price - L.slope * lastLow.idx;
+      // 下轨（过最近重要低点）
+      ctx.strokeStyle = 'rgba(56,139,253,0.45)'; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(x(x0), y(pIntercept + L.slope * x0)); ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.stroke();
+      ctx.setLineDash([]);
+      // 轨道间填充
+      ctx.fillStyle = 'rgba(56,139,253,0.06)';
+      ctx.beginPath();
+      ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1)));
+      ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.lineTo(x(x0), y(pIntercept + L.slope * x0));
+      ctx.closePath(); ctx.fill();
+      // 标注
+      ctx.fillStyle = '#388bfd'; ctx.font = 'bold 9px sans-serif';
+      ctx.fillText('上升趋势线 ' + lineAt(L, endIdx - 1).toFixed(2), padL + 2, y(lineAt(L, endIdx - 1)) - 4);
+    }
   }
-
-  // 快线（蓝实线=上轨/下轨按趋势方向自动变化）
-  ctx.strokeStyle = '#388bfd'; ctx.lineWidth = 1.8; ctx.setLineDash([]); ctx.beginPath();
-  fast.forEach((v, i) => { i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)); });
-  ctx.stroke();
-
-  // 慢线（红实线）
-  ctx.strokeStyle = '#d93a2f'; ctx.lineWidth = 1.8; ctx.beginPath();
-  slow.forEach((v, i) => { i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)); });
-  ctx.stroke();
-
-  // 铁轨末端价位标签
-  const lastFast = fast[fast.length - 1], lastSlow = slow[slow.length - 1];
-  ctx.font = 'bold 9px sans-serif';
-  ctx.fillStyle = '#388bfd';
-  ctx.fillText('快线 ' + lastFast.toFixed(2), padL + 2, y(lastFast) - 2);
-  ctx.fillStyle = '#d93a2f';
-  ctx.fillText('慢线 ' + lastSlow.toFixed(2), padL + 2, y(lastSlow) + 10);
+  // 下降趋势线（红实线）+ 平行通道
+  if (chan.downLine) {
+    const L = chan.downLine;
+    const x0 = Math.max(startIdx - 10, 0), x1 = Math.min(endIdx + 5, allK.length - 1);
+    ctx.strokeStyle = '#d93a2f'; ctx.lineWidth = 1.6; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1))); ctx.stroke();
+    const lastHigh = chan.pivots.filter(p => p.type === 'high').slice(-1)[0];
+    if (lastHigh) {
+      const pIntercept = lastHigh.price - L.slope * lastHigh.idx;
+      ctx.strokeStyle = 'rgba(217,58,47,0.45)'; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(x(x0), y(pIntercept + L.slope * x0)); ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(217,58,47,0.06)';
+      ctx.beginPath();
+      ctx.moveTo(x(x0), y(lineAt(L, x0))); ctx.lineTo(x(x1), y(lineAt(L, x1)));
+      ctx.lineTo(x(x1), y(pIntercept + L.slope * x1)); ctx.lineTo(x(x0), y(pIntercept + L.slope * x0));
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#d93a2f'; ctx.font = 'bold 9px sans-serif';
+      ctx.fillText('下降趋势线 ' + lineAt(L, endIdx - 1).toFixed(2), padL + 2, y(lineAt(L, endIdx - 1)) - 4);
+    }
+  }
 
   // K线柱体
   data.forEach((k, i) => {
@@ -8240,21 +8362,35 @@ function drawChart(klines, canvasId) {
     ctx.strokeStyle = up ? '#f85149' : '#3fb950';
     ctx.fillStyle = up ? '#f85149' : '#3fb950';
     ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x(i), y(k.high)); ctx.lineTo(x(i), y(k.low)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x(startIdx + i), y(k.high)); ctx.lineTo(x(startIdx + i), y(k.low)); ctx.stroke();
     const top = y(Math.max(k.open, k.close)), bh = Math.max(1, Math.abs(y(k.open) - y(k.close)));
-    ctx.fillRect(x(i) - bw / 2, top, bw, bh);
+    ctx.fillRect(x(startIdx + i) - bw / 2, top, bw, bh);
+  });
+
+  // MA20/MA60 均线（辅助参考，细线）
+  const closes = data.map(k => k.close);
+  const ma = (n) => { const out = []; for (let i = 0; i < closes.length; i++) { if (i < n - 1) { out.push(null); continue; } let s = 0; for (let j = i - n + 1; j <= i; j++) s += closes[j]; out.push(s / n); } return out; };
+  [ [20, 'rgba(240,185,11,0.6)'], [60, 'rgba(139,148,158,0.5)'] ].forEach(([n, col]) => {
+    const arr = ma(n);
+    ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([]); ctx.beginPath();
+    let started = false;
+    arr.forEach((v, i) => { if (v === null) return; if (!started) { ctx.moveTo(x(startIdx + i), y(v)); started = true; } else ctx.lineTo(x(startIdx + i), y(v)); });
+    ctx.stroke();
   });
 
   // 日期标签
   ctx.fillStyle = '#8b949e'; ctx.font = '9px sans-serif';
   [0, Math.floor(data.length/3), Math.floor(data.length*2/3), data.length-1].forEach(i => {
     const lbl = data[i].date.length >= 10 ? data[i].date.substring(2).replace(/-/g,'') : data[i].date;
-    ctx.fillText(lbl, x(i) - 18, mainH - 6);
+    ctx.fillText(lbl, x(startIdx + i) - 18, mainH - 6);
   });
+  // 缩放提示
+  ctx.fillStyle = 'rgba(139,148,158,0.6)'; ctx.font = '9px sans-serif';
+  ctx.fillText('滚轮缩放 · 拖拽平移', padL + 2, padT + 10);
 
   // ===== 下方 MACD 副图 =====
-  const mY = mainH + macPadT; // MACD区域起始Y
-  const mH = macH - 10; // MACD绘图高度
+  const mY = mainH + macPadT;
+  const mH = macH - 10;
   const ema12 = ema(closes, 12), ema26 = ema(closes, 26);
   const dif = ema12.map((v,i) => v - ema26[i]);
   const deaArr = ema(dif, 9);
@@ -8265,37 +8401,73 @@ function drawChart(klines, canvasId) {
   const my = v => mY + 4 + (macdMax - v) / macdRange * (mH - 8);
   const zeroY = my(0);
 
-  // MACD 零轴
   ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1; ctx.setLineDash([3,4]);
   ctx.beginPath(); ctx.moveTo(padL, zeroY); ctx.lineTo(W - padR, zeroY); ctx.stroke();
   ctx.setLineDash([]);
   ctx.fillStyle = '#8b949e'; ctx.font = '8px sans-serif';
   ctx.fillText('0', W - padR + 4, zeroY + 3);
 
-  // MACD 柱
   macdHist.forEach((v, i) => {
     if (v === 0) return;
-    const barX = x(i), barY = my(v), barZ = zeroY;
+    const barX = x(startIdx + i), barY = my(v), barZ = zeroY;
     const top = Math.min(barY, barZ), hh = Math.abs(barY - barZ);
     ctx.fillStyle = v > 0 ? 'rgba(248,81,73,0.7)' : 'rgba(63,185,80,0.7)';
     ctx.fillRect(barX - bw*0.4, top, bw*0.8, Math.max(1, hh));
   });
 
-  // DIF 白线 + DEA 黄线
   ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.beginPath();
-  dif.forEach((v,i) => { i===0 ? ctx.moveTo(x(i), my(v)) : ctx.lineTo(x(i), my(v)); });
+  dif.forEach((v,i) => { i===0 ? ctx.moveTo(x(startIdx + i), my(v)) : ctx.lineTo(x(startIdx + i), my(v)); });
   ctx.stroke();
   ctx.strokeStyle = '#f0b90b'; ctx.lineWidth = 1; ctx.beginPath();
-  deaArr.forEach((v,i) => { i===0 ? ctx.moveTo(x(i), my(v)) : ctx.lineTo(x(i), my(v)); });
+  deaArr.forEach((v,i) => { i===0 ? ctx.moveTo(x(startIdx + i), my(v)) : ctx.lineTo(x(startIdx + i), my(v)); });
   ctx.stroke();
 
-  // MACD 标签
   ctx.fillStyle = '#ffffff'; ctx.font = '8px sans-serif';
   ctx.fillText('DIF', W - padR + 4, my(dif[dif.length-1]) + 3);
   ctx.fillStyle = '#f0b90b';
   ctx.fillText('DEA', W - padR + 4, my(deaArr[deaArr.length-1]) + 3);
 }
-// ============ 个股分析主流程 ============
+
+// 绑定K线图交互：滚轮缩放 + 拖拽平移
+function bindChartInteractions(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || canvas._bound) return;
+  canvas._bound = true;
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zs = canvas._zs || (canvas._zs = { zoom: 1, offset: 0 });
+    const factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+    zs.zoom = Math.max(0.5, Math.min(8, zs.zoom * factor));
+    const klines = canvas._klines;
+    if (klines) drawChart(klines, canvasId);
+  }, { passive: false });
+  let dragging = false, startX = 0, startOffset = 0;
+  canvas.addEventListener('mousedown', (e) => {
+    dragging = true; startX = e.clientX; startOffset = canvas._zs.offset;
+    canvas.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging || !canvas._klines) return;
+    const dx = e.clientX - startX;
+    const zs = canvas._zs;
+    const visCount = Math.max(20, Math.min(canvas._klines.length, Math.round(120 / zs.zoom)));
+    // 像素dx对应的K线数（反向：向右拖=看更早的数据）
+    const kPerPx = visCount / canvas.getBoundingClientRect().width;
+    zs.offset = Math.max(0, Math.min(canvas._klines.length - visCount, startOffset + dx * kPerPx));
+    drawChart(canvas._klines, canvasId);
+  });
+  window.addEventListener('mouseup', () => { dragging = false; if (canvas) canvas.style.cursor = 'crosshair'; });
+}
+
+
+// 打开东方财富个股页
+function openEastmoney(ev, code) {
+  if (ev) ev.preventDefault();
+  if (!code || !/^\d{6}$/.test(code)) return;
+  const prefix = (code.startsWith('6') || code.startsWith('9') || code.startsWith('5')) ? 'sh' : 'sz';
+  window.open('https://quote.eastmoney.com/' + prefix + code + '.html', '_blank');
+}
+// ============ 个股分析主流程 ============// ============ 个股分析主流程 ============
 async function analyze(code) {
   const input = (code || $('codeInput').value).trim();
   if (!/^\d{6}$/.test(input)) { showError('error', '请输入6位数字股票代码'); return; }
