@@ -8138,10 +8138,10 @@ function renderResult(data, container) {
     ${data.signals.sells.length ? data.signals.sells.map(s => `<div class="signal sell-signal">🔴 ${s}</div>`).join('') : '<div class="signal">当前无明显卖点信号——趋势未破，可继续持有（徐小明：趋势为王）</div>'}
     <h4>📌 关键价位</h4>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:6px">
-      <div class="level-box"><div class="q-label">强支撑(60日低/60日线)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.strongSupport)}</div></div>
-      <div class="level-box"><div class="q-label">短期支撑(20日低)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.support)}</div></div>
-      <div class="level-box"><div class="q-label">短期压力(20日高)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.resist)}</div></div>
-      <div class="level-box"><div class="q-label">强压力(60日高/通道上轨)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.strongResist)}</div></div>
+      <div class="level-box"><div class="q-label">强支撑(区间低点)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.strongSupport)}</div></div>
+      <div class="level-box"><div class="q-label">短期支撑(现价下最近)</div><div class="q-val" style="color:var(--green)">${fmtPrice(data.signals.levels.support)}</div></div>
+      <div class="level-box"><div class="q-label">短期压力(现价上最近)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.resist)}</div></div>
+      <div class="level-box"><div class="q-label">强压力(60日高)</div><div class="q-val" style="color:var(--red)">${fmtPrice(data.signals.levels.strongResist)}</div></div>
       <div class="level-box"><div class="q-label">止损参考</div><div class="q-val" style="color:var(--gold)">${fmtPrice(data.signals.levels.stop)}</div></div>
     </div>
     <div style="margin-top:8px;font-size:0.85em;color:var(--muted)">📏 波段位置：距120日低点 ${data.signals.chgFromLow.toFixed(0)}% · 通道位置 ${(data.signals.channelPos*100).toFixed(0)}%（0=下轨 100=上轨）</div>
