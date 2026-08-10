@@ -8076,10 +8076,10 @@ function calcSignals(klines, trend, macd, vol, div, score, k60min) {
 
   const levels = {
     strongSupport: bestSupport.v,   // 强支撑：现价下方最近的支撑（如60日线/20日低点）
-    support: Math.min(ma20, close) < close ? Math.max(ma20, bestSupport.v) : bestSupport.v, // 短期支撑：20日线或最近支撑（贴近现价）
-    resist: bestResist.v,           // 短期压力：现价上方最近的压力
-    strongResist: bestResist.v,     // 强压力：现价上方最近的压力
-    stop: stopPrice                 // 止损参考：支撑下方3%
+    support: bestSupport.v,        // 短期支撑：现价下方最近支撑（已是最优候选）
+    resist: bestResist.v,          // 短期压力：现价上方最近的压力（20日高点）
+    strongResist: high60,          // 强压力：60日高点（长期参考，不受"最近"干扰）
+    stop: stopPrice                // 止损参考：支撑下方3%
   };
   return { buys, sells, levels, chgFromLow, channelPos, low60, high60 };
 }
