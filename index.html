@@ -8838,6 +8838,7 @@ async function analyze(code) {
     }
 
     const trend = analyzeTrend(klines);
+    const jiuqu = calcJiuquTrend(klines); // 九曲趋势通道
     const macdData = calcMACD(klines);
     const divergence = detectDivergence(klines, macdData);
     const tds = detectTD(klines);
@@ -8879,6 +8880,119 @@ async function analyze(code) {
     $('loading').style.display = 'none'; $('searchBtn').disabled = false;
   }
 }
+function calcJiuquTrend(klines) {
+  if (!klines || klines.length < 70) return null;
+  const closes = klines.map(k => k.close);
+  const highs = klines.map(k => k.high);
+  const lows = klines.map(k => k.low);
+  // 均线
+  const ma = (arr, n) => arr.slice(-n).reduce((s, v) => s + v, 0) / n;
+  const ma20 = closes.slice(-20).map((_, i, a) => ma(a.slice(0, i + 1), Math.min(i + 1, 20)));
+  const ma60 = closes.slice(-60).map((_, i, a) => ma(a.slice(0, i + 1), Math.min(i + 1, 60)));
+  const curMA20 = ma20[ma20.length - 1];
+  const curMA60 = ma60[ma60.length - 1];
+  const curClose = closes[closes.length - 1];
+  const prevClose = closes[closes.length - 2];
+  // 趋势通道：用MA20/MA60的斜率方向做趋势方向
+  // 趋势线 = 线性回归拟合均线（更平滑的趋势方向）
+  const linreg = (arr, n) => {
+    const end = arr.length;
+    const start = Math.max(0, end - n);
+    const seg = arr.slice(start, end);
+    const m = seg.length;
+    let sx = 0, sy = 0, sxy = 0, sx2 = 0;
+    for (let i = 0; i < m; i++) { sx += i; sy += seg[i]; sxy += i * seg[i]; sx2 += i * i; }
+    const b = (m * sxy - sx * sy) / (m * sx2 - sx * sx);
+    const a = (sy - b * sx) / m;
+    return { slope: b, intercept: a }; // slope > 0 上升，< 0 下降
+  };
+  const trend20 = linreg(ma20, Math.min(ma20.length, 20));
+  const trend60 = linreg(ma60, Math.min(ma60.length, 60));
+  // 趋势状态判断（九曲核心：价格在趋势之上/之下）
+  // 短期趋势：收盘价 vs MA20
+  // 长期趋势：收盘价 vs MA60
+  const aboveMA20 = curClose > curMA20;
+  const aboveMA60 = curClose > curMA60;
+  const ma20SlopeUp = trend20.slope > 0;
+  const ma60SlopeUp = trend60.slope > 0;
+  // 趋势通道：短上+长上=多头，短下+长下=空头，混合=震荡
+  let status = '';
+  let action = '';
+  if (aboveMA20 && aboveMA60) {
+    if (ma20SlopeUp && ma60SlopeUp) { status = '上升趋势（短+长均线多头排列）'; action = '持仓为主，突破长期趋势加仓'; }
+    else { status = '中期向上（价格在双均线上）'; action = '持仓，回调不破短期均线加仓'; }
+  } else if (!aboveMA20 && !aboveMA60) {
+    if (!ma20SlopeUp && !ma60SlopeUp) { status = '下降趋势（短+长均线空头排列）'; action = '轻仓/空仓，反弹不破均线减仓'; }
+    else { status = '中期向下（价格在双均线下方）'; action = '观望，反抽均线受压减仓'; }
+  } else {
+    status = '震荡趋势（短期与长期趋势分化）';
+    action = aboveMA20 ? '短期偏强，突破长期趋势后加仓' : '短期偏弱，回踩长期趋势获支撑后轻仓';
+  }
+  // 趋势突破/破位信号（九曲核心操作信号）
+  // 判断：近5日是否向上突破MA20/MA60，或者向下跌破
+  const recentCloses = closes.slice(-5);
+  const ma20_5ago = ma20[ma20.length - 6] || ma20[0];
+  const ma60_5ago = ma60[ma60.length - 6] || ma60[0];
+  // 是否刚向上突破均线（由下转上）
+  const breakAboveMA20 = !aboveMA20 ? false : (recentCloses.slice(0, -1).some(c => c <= (ma20[ma20.length - 2] || 0))) && curClose > curMA20;
+  const breakAboveMA60 = !aboveMA60 ? false : (recentCloses.slice(0, -1).some(c => c <= (ma60[ma60.length - 2] || 0))) && curClose > curMA60;
+  // 是否向下破位均线
+  const breakBelowMA20 = aboveMA20 ? false : (recentCloses.slice(0, -1).some(c => c >= (ma20[ma20.length - 2] || Infinity))) && curClose < curMA20;
+  const breakBelowMA60 = aboveMA60 ? false : (recentCloses.slice(0, -1).some(c => c >= (ma60[ma60.length - 2] || Infinity))) && curClose < curMA60;
+  // 计算精确趋势突破点位（九曲文章中的方法：用当天最高/最低与均线比较）
+  // 用最近20日的波段高低点作为通道参考
+  const last20highs = highs.slice(-20);
+  const last20lows = lows.slice(-20);
+  const last60highs = highs.slice(-60);
+  const last60lows = lows.slice(-60);
+  const high20 = Math.max(...last20highs);
+  const low20 = Math.min(...last20lows);
+  const high60 = Math.max(...last60highs);
+  const low60 = Math.min(...last60lows);
+  // 九转序列：连续N根同向K线（简化版：9根）
+  const countConsecutive = (arr, idx, fn) => {
+    let count = 1;
+    for (let i = idx - 1; i >= 0 && fn(arr[i], arr[i + 1]); i--) count++;
+    return count;
+  };
+  const upCount = countConsecutive(closes, closes.length - 1, (a, b) => a >= b);
+  const downCount = countConsecutive(closes, closes.length - 1, (a, b) => a <= b);
+  // 九转序列：连续9根以上同向 = 反转信号
+  const jiu9up = upCount >= 9;
+  const jiu9down = downCount >= 9;
+  // 九曲趋势操作信号总结
+  let signal = '';
+  if (breakAboveMA20 && aboveMA60) signal = '突破短期趋势 ✅（关注是否突破长期趋势）';
+  else if (breakAboveMA60) signal = '突破长期趋势 ✅ 加仓信号！';
+  else if (breakBelowMA20) signal = '跌破短期趋势 ⚠️ 减仓信号';
+  else if (breakBelowMA60) signal = '跌破长期趋势 ⚠️ 清仓信号';
+  else if (jiu9up) signal = '连续' + upCount + '根阳线 ⚠️ 注意冲高回落风险';
+  else if (jiu9down) signal = '连续' + downCount + '根阴线 🔔 注意反弹机会';
+  else signal = '暂无明确趋势信号，等待方向明确';
+  // 纠错标准（九曲核心）：趋势破位即纠错止损
+  const stopLoss = aboveMA20 ? (curMA20 * 0.99).toFixed(2) : (curMA60 * 0.99).toFixed(2);
+  return {
+    curMA20: +curMA20.toFixed(2),
+    curMA60: +curMA60.toFixed(2),
+    trend20Slope: trend20.slope,
+    trend60Slope: trend60.slope,
+    aboveMA20, aboveMA60,
+    ma20SlopeUp, ma60SlopeUp,
+    status,
+    action,
+    signal,
+    breakAboveMA20, breakAboveMA60,
+    breakBelowMA20, breakBelowMA60,
+    high20: +high20.toFixed(2), low20: +low20.toFixed(2),
+    high60: +high60.toFixed(2), low60: +low60.toFixed(2),
+    stopLoss,
+    jiu9up, jiu9down,
+    upCount, downCount,
+    pctFromMA20: ((curClose / curMA20 - 1) * 100).toFixed(1),
+    pctFromMA60: ((curClose / curMA60 - 1) * 100).toFixed(1)
+  };
+}
+
 // ============ 大盘分析 ============
 async function analyzeMarket(code) {
   const input = (code || $('marketInput').value || '000001').trim();
@@ -8905,10 +9019,10 @@ async function analyzeMarket(code) {
     };
     const suggestions = [
       { layer: '① 方向层', content: '大盘方向：' + trend.status + '。结合观澜方向层：关注成交量分级（2万亿及格/2.5万亿舒服/3万亿放大波动）与产业主线（科技/金融/周期轮动）。' },
-      { layer: '② 趋势层', content: '趋势状态：' + trend.status + '（权重60-70%，趋势是最后防线）。' + trend.suggestion },
-      { layer: '③ 结构层', content: divergence.signals.join('；') || '近期无明确背离结构。底部结构需60分钟以上周期确认。' },
-      { layer: '④ 点位层', content: '短期支撑 ' + trend.low20 + ' / 压力 ' + trend.high20 + '；中期支撑 ' + trend.low60 + ' / 压力 ' + trend.high60 + '。Wu2198每日三档：支撑—分界—压力，破分界减仓。' },
-      { layer: '⑤ 纪律层', content: '综合评分 ' + score.final + '（' + score.verdict + '）。双趋势之上可满仓、之下空仓；不加杠杆；大跌不恐慌、大涨不贪婪。' }
+      { layer: '② 趋势层（九曲）', content: '九曲趋势状态：' + jiuqu.status + '。短期趋势线（MA20）' + jiuqu.curMA20 + '（现价' + (jiuqu.aboveMA20 ? '上方' : '下方') + '），长期趋势线（MA60）' + jiuqu.curMA60 + '（现价' + (jiuqu.aboveMA60 ? '上方' : '下方') + '）。' + jiuqu.signal },
+      { layer: '③ 结构层', content: divergence.signals.join('；') || '近期无明确背离结构。底部结构需60分钟以上周期确认。' + (jiuqu.jiu9up || jiuqu.jiu9down ? '（九转序列：连续' + Math.max(jiuqu.upCount, jiuqu.downCount) + '根同向K线，注意反转）' : '') },
+      { layer: '④ 点位层', content: '九曲趋势通道：短期支撑 ' + jiuqu.curMA20 + ' / 压力 ' + jiuqu.high20 + '；长期支撑 ' + jiuqu.curMA60 + ' / 压力 ' + jiuqu.high60 + '。突破长期趋势（' + jiuqu.curMA60 + '上方）加仓，破短期趋势（' + jiuqu.curMA20 + '下方）减仓，趋势破位=纠错止损（' + jiuqu.stopLoss + '）。' },
+      { layer: '⑤ 纪律层', content: '综合评分 ' + score.final + '（' + score.verdict + '）。九曲纪律：双趋势之上可满仓、之下空仓；绝对止损浮亏10%；不加杠杆；大跌不恐慌、大涨不贪婪。' }
     ];
     renderResult({ quote: quoteData, trend, macd: div, volume: vol, finance, news: [], announcements: [], klines, score, suggestions }, 'resultMarket');
   } catch (e) { showError('errorMarket', '大盘分析失败：' + e.message); }
