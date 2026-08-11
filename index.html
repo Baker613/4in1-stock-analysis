@@ -194,7 +194,20 @@ th { background: rgba(255,255,255,.04); color: var(--gold); font-weight: 600; }
   <div class="card">
     <h3>📊 综合评分标准说明</h3>
     <div class="suggestion-card"><div class="lay-name">评分构成（满分100，基准50分）</div><div class="lay-body">综合评分 = 50 + 技术面(±50×0.30) + 资金面(±30×0.30) + 基本面(±25×0.20) + 情绪面(±10×0.20) + 消息面(当前为中性0分)。<br><b>技术面权重30%</b>：基于趋势评分（均线多空排列、20/60日线关系）映射，A股技术驱动强权重最高；<b>资金面权重30%</b>：基于量能评分（5日/20日量比，放量/缩量），资金面是A股核心驱动力；<b>基本面权重20%</b>：基于最新财报ROE>10%加10分、净利同比>20%加10分、营收同比>10%加5分，亏损减8分等；<b>情绪面权重20%</b>：趋势状态映射（强势上升+10、偏强震荡+5、偏弱震荡-5、弱势下行-10）。理论最高81分、最低19分。</div></div>
-    <div class="suggestion-card"><div class="lay-name">分级标准</div><div class="lay-body">≥80 <b>强买</b>（重仓买入/持有）｜65-79 <b>买入</b>（建仓/加仓）｜50-64 <b>观望</b>（持有观察，不追高）｜35-49 <b>减仓</b>（减仓防范风险，反弹至压力位减仓）｜&lt;35 <b>卖出</b>（规避/清仓）</div></div>
+    <div class="card"><h3>🌐 行业周期地图（2026-08 研判）</h3>
+      <div style="font-size:0.8em;color:var(--muted);margin-bottom:6px">知识来源：指汇盈（药师）+ 价值发现者 + 兴业研究周期框架。复苏/景气行业=周期面加分；出清/过热行业=减分。</div>
+      ${Object.entries(CYCLE_KNOWLEDGE.industries).map(([name, v]) => `
+      <div class="suggestion-card" style="border-left:3px solid ${cycleStageColor(v.cycle)};padding:6px 10px;margin:4px 0">
+        <div class="lay-name" style="font-size:0.85em">${name} <span style="float:right;color:${cycleStageColor(v.cycle)}">${cycleStageLabel(v.cycle)} · 周期分${v.score>=0?'+':''}${v.score}</span></div>
+        <div class="lay-body" style="font-size:0.78em">${v.note}</div>
+      </div>`).join('')}
+      <div class="suggestion-card" style="border-left:3px solid #388bfd;padding:6px 10px;margin:6px 0 0">
+        <div class="lay-name" style="font-size:0.85em">📌 大盘周期定位</div>
+        <div class="lay-body" style="font-size:0.78em">${Object.entries(CYCLE_KNOWLEDGE.macro).map(([k, v]) => `${v.label}：<b>${v.stage}</b>（${v.detail}）`).join('<br>')}</div>
+      </div>
+    </div>
+    
+      <div class="suggestion-card"><div class="lay-name">分级标准</div><div class="lay-body">≥80 <b>强买</b>（重仓买入/持有）｜65-79 <b>买入</b>（建仓/加仓）｜50-64 <b>观望</b>（持有观察，不追高）｜35-49 <b>减仓</b>（减仓防范风险，反弹至压力位减仓）｜&lt;35 <b>卖出</b>（规避/清仓）</div></div>
     <div class="suggestion-card"><div class="lay-name">使用须知</div><div class="lay-body">① 本评分是<b>技术面为主、资金面为辅</b>的量化参考，不构成投资建议；② 消息面暂为中性（新闻接口数据有限），后续可接入情感分析；③ 评分基于<b>历史数据</b>，无法预测突发利空/利好；④ 建议结合五层框架建议综合判断——趋势为王、结构确认拐点、点位执行、纪律兜底；⑤ 市场有风险，投资需谨慎。</div></div>
   </div>
 </div>
@@ -205,6 +218,118 @@ th { background: rgba(255,255,255,.04); color: var(--gold); font-weight: 600; }
 </div>
 </div>
 
+
+<script>
+// 宏观行业周期研判库（基于 兴业研究2026周期框架 + 价值发现者 + 指汇盈 已学知识）
+// 更新：2026-08-11
+// cycle: 0=衰退出清 1=复苏初期 2=景气上行 3=过热/拥挤 4=顶部回落
+// score: 周期面对评分的贡献（-20 ~ +20）
+
+const CYCLE_KNOWLEDGE = {
+  // 关键宏观数据点（用于大盘周期定位展示）
+  macro: {
+    inventory: { label: '库存周期', stage: '被动补库→主动去库切换', detail: 'M1同比领先库存约1年，2025.9 M1拐头向下；2026年处于被动补库→主动去库切换期', cycle: 1 },
+    juglar: { label: '朱格拉周期', stage: '产能出清中段', detail: '整治内卷+PPI压制设备投资；AI硬件基础设施处于扩张中段', cycle: 1 },
+    realestate: { label: '房地产周期', stage: '调整期（15-20年大周期）', detail: '拖累经济的重要变量，2026年仍在调整', cycle: 0 },
+    kondratieff: { label: '康波周期', stage: '第五轮萧条期末端→第六轮复苏初期', detail: 'AI与新能源驱动；康波复苏期新兴行业享估值溢价', cycle: 2 },
+    sentiment: { label: '情绪周期（92科比）', stage: '冰点→回暖切换', detail: '恐贪指数10（极度恐惧=买点区）；筹码出清接近完成', cycle: 1 },
+    policy: { label: '政策周期', stage: '宽松预期升温', detail: '7月PMI 49.2，会议通稿再现"加大逆周期调节力度"；降息条件充分', cycle: 2 }
+  },
+  // 行业周期研判（2026-08，基于指汇盈/价值发现者最新文章）
+  industries: {
+    '创新药/医药': { cycle: 2, score: 12, note: '第五轮产业周期起点：融资改善+BD重新活跃+大药企补库存；美股XBI新高；资金回流，成果兑现期关注龙头' },
+    '化工': { cycle: 2, score: 10, note: '主动去库走完出清彻底，库存较3月降超50%；8月底旺季补库；伊朗制裁=地炼供给侧改革预期' },
+    '黄金/贵金属': { cycle: 2, score: 12, note: '供给约束+央行7月购金64万盎司逐月加码；长短债利差扩大利好；等降息预期重燃；买黄金不如买黄金股' },
+    '有色/铜': { cycle: 2, score: 8, note: '刚果金禁出口铜精矿钴精矿利好国内铜矿；库存持续下降+加息预期见顶=新一轮行情酝酿；关注度低估值不贵' },
+    '煤炭': { cycle: 2, score: 6, note: '动力煤价回升，Q2业绩明牌；股息率仍5%+；医药行情结束后资金回补' },
+    'AI硬件/半导体': { cycle: 3, score: -4, note: '景气高位但产能扩张中；存储涨价最快时期过去（闪迪/西数指引保守）；谷歌FCF转负；回调幅度够但时间不够' },
+    '存储芯片': { cycle: 3, score: -6, note: '涨价近顶（美光/闪迪涨价2/3来自涨价）；但长鑫拒绝苹果降价+华为小米扫货=国产设备/存储仍紧缺' },
+    'AI应用/软件': { cycle: 1, score: 5, note: 'AI从建设期进入商业化期；软件上涨、硬件企稳；微软云+40%验证收入' },
+    '消费/白酒': { cycle: 1, score: 5, note: '筹码出清干净+政策刺激预期="干柴烈火"；下半年赔率大胜率低，配业绩好/股息高/估值不贵龙头' },
+    '银行/红利': { cycle: 1, score: 4, note: '红利回撤13-16%接近10年均值；价格处2022年位置"可定投"；股市强红利弱——大盘走强则红利相对弱' },
+    '军工': { cycle: 1, score: 2, note: '地缘扰动+订单修复预期；特朗普"以打促谈"反复，板块脉冲式机会' },
+    '机器人': { cycle: 1, score: 2, note: '下一轮牛市主线预期，仍处"难有业绩兑现的概念阶段"；等类似ChatGPT时刻的催化剂' },
+    '房地产': { cycle: 0, score: -10, note: '15-20年大周期调整中段；政策托底但基本面未反转；回避为主' },
+    '光伏/新能源': { cycle: 0, score: -8, note: '产能出清中段（朱格拉周期）；内卷整治中，非最佳布局时机；等供给出清信号' },
+    '券商/金融': { cycle: 1, score: 3, note: '政策宽松预期+成交回暖受益；牛市中段弹性品种，当前政策周期向上' },
+    '影视/传媒': { cycle: 1, score: 2, note: '暑期档+IP变现；中报分化；AI+内容应用受益' },
+    '旅游/航空': { cycle: 2, score: 5, note: '若霍尔木兹通航油价下跌最受益；居民消费复苏+免签扩容；暑期旺季' },
+    '钢铁/水泥': { cycle: 0, score: -6, note: '地产链拖累，产能过剩，价格低迷；等地产企稳信号' }
+  }
+};
+
+// 股票代码 → 宏观行业 映射（核心股票+用户持仓+各行业代表）
+const STOCK_INDUSTRY = {
+  // 用户实盘4只
+  '600977': '影视/传媒', '000829': '券商/金融', '002291': 'AI应用/软件', '300376': '光伏/新能源',
+  // 模拟账户9只
+  '601225': '煤炭', '000333': '消费/白酒', '000651': '消费/白酒', '000895': '消费/白酒',
+  '002032': '消费/白酒', '510300': '银行/红利', '600660': 'AI硬件/半导体', '605020': '化工', '688187': 'AI硬件/半导体',
+  // 快捷入口
+  '600519': '消费/白酒', '300750': '光伏/新能源',
+  // 各行业代表
+  '600036': '银行/红利', '601398': '银行/红利', '601288': '银行/红利', '600000': '银行/红利', '601166': '银行/红利',
+  '601318': '券商/金融', '600030': '券商/金融', '601688': '券商/金融', '601601': '券商/金融',
+  '600276': '创新药/医药', '300760': '创新药/医药', '600196': '创新药/医药', '002821': '创新药/医药',
+  '603259': '创新药/医药', '300347': '创新药/医药', '000538': '创新药/医药', '600085': '创新药/医药',
+  '002415': 'AI应用/软件', '002230': 'AI应用/软件', '300059': '券商/金融', '688111': 'AI应用/软件',
+  '002475': 'AI硬件/半导体', '603501': 'AI硬件/半导体', '688981': 'AI硬件/半导体', '002371': 'AI硬件/半导体',
+  '688012': 'AI硬件/半导体', '600584': 'AI硬件/半导体', '603986': 'AI硬件/半导体', '688008': 'AI硬件/半导体',
+  '600745': 'AI硬件/半导体', '002049': 'AI硬件/半导体', '688041': 'AI硬件/半导体',
+  '601899': '有色/铜', '600362': '有色/铜', '000630': '有色/铜', '603993': '有色/铜', '601168': '有色/铜',
+  '600547': '黄金/贵金属', '601899': '有色/铜', '002155': '黄金/贵金属', '600988': '黄金/贵金属', '600489': '黄金/贵金属',
+  '600111': '有色/铜', '601600': '有色/铜', '000807': '有色/铜',
+  '600309': '化工', '600426': '化工', '600143': '化工', '002648': '化工', '601216': '化工', '600346': '化工',
+  '600019': '钢铁/水泥', '600585': '钢铁/水泥', '601668': '房地产', '000002': '房地产', '600048': '房地产',
+  '601012': '光伏/新能源', '002459': '光伏/新能源', '600438': '光伏/新能源', '300274': '光伏/新能源',
+  '601633': '光伏/新能源', '002594': '光伏/新能源',
+  '600150': '军工', '600893': '军工', '600760': '军工', '002179': '军工',
+  '300124': '机器人', '002472': '机器人', '688017': '机器人', '002747': '机器人',
+  '600009': '旅游/航空', '601111': '旅游/航空', '600115': '旅游/航空', '601021': '旅游/航空',
+  '600887': '消费/白酒', '603288': '消费/白酒', '600809': '消费/白酒', '000858': '消费/白酒', '000568': '消费/白酒',
+  '601088': '煤炭', '600188': '煤炭', '601898': '煤炭', '600546': '煤炭', '601666': '煤炭'
+};
+
+// 名称关键词 → 行业 兜底（stockNameOf解析名称后匹配）
+const INDUSTRY_KEYWORDS = [
+  ['银行', '银行/红利'], ['证券', '券商/金融'], ['保险', '券商/金融'], ['金融', '券商/金融'],
+  ['药', '创新药/医药'], ['医疗', '创新药/医药'], ['生物', '创新药/医药'], ['医', '创新药/医药'],
+  ['芯片', 'AI硬件/半导体'], ['半导体', 'AI硬件/半导体'], ['集成电路', 'AI硬件/半导体'],
+  ['电子', 'AI硬件/半导体'], ['光电', 'AI硬件/半导体'], ['科技', 'AI应用/软件'], ['软件', 'AI应用/软件'],
+  ['信息', 'AI应用/软件'], ['数据', 'AI应用/软件'], ['智能', 'AI应用/软件'],
+  ['黄金', '黄金/贵金属'], ['贵金属', '黄金/贵金属'], ['白银', '黄金/贵金属'],
+  ['铜', '有色/铜'], ['铝', '有色/铜'], ['有色', '有色/铜'], ['矿业', '有色/铜'], ['金属', '有色/铜'], ['稀土', '有色/铜'],
+  ['化工', '化工'], ['化学', '化工'], ['石化', '化工'], ['材料', '化工'],
+  ['煤', '煤炭'], ['能源', '煤炭'],
+  ['钢铁', '钢铁/水泥'], ['水泥', '钢铁/水泥'], ['建材', '钢铁/水泥'],
+  ['地产', '房地产'], ['置业', '房地产'], ['城建', '房地产'],
+  ['光伏', '光伏/新能源'], ['新能源', '光伏/新能源'], ['锂', '光伏/新能源'], ['电池', '光伏/新能源'],
+  ['军', '军工'], ['船舶', '军工'], ['航天', '军工'],
+  ['机器', '机器人'], ['自动化', '机器人'],
+  ['航空', '旅游/航空'], ['机场', '旅游/航空'], ['旅游', '旅游/航空'],
+  ['白酒', '消费/白酒'], ['酒', '消费/白酒'], ['食品', '消费/白酒'], ['饮料', '消费/白酒'],
+  ['乳业', '消费/白酒'], ['消费', '消费/白酒'], ['家电', '消费/白酒'],
+  ['电影', '影视/传媒'], ['传媒', '影视/传媒'], ['影视', '影视/传媒'], ['文化', '影视/传媒'],
+  ['游戏', 'AI应用/软件'], ['传媒', '影视/传媒']
+];
+
+// 行业 → 周期研判 快速查询
+function industryCycleOf(industry) {
+  return CYCLE_KNOWLEDGE.industries[industry] || { cycle: 1, score: 0, note: '行业未覆盖，按中性处理（周期框架暂无该行业明确研判）' };
+}
+
+// 股票代码 → 行业（优先查映射表，其次名称关键词）
+function stockIndustryOf(code, name) {
+  if (STOCK_INDUSTRY[code]) return STOCK_INDUSTRY[code];
+  if (name) {
+    for (const [kw, ind] of INDUSTRY_KEYWORDS) {
+      if (name.includes(kw)) return ind;
+    }
+  }
+  return null;
+}
+
+</script>
 <script>
 // ============ Tab 切换 ============
 function switchTab(name) {
@@ -7925,14 +8050,14 @@ function analyzeVolume(klines) {
   return { signals, ratio, score };
 }
 
-function scoreStock(trend, vol, finData) {
+function scoreStock(trend, vol, finData, industry) {
   let score = 0; const parts = {};
-  // 方案B权重放大：技术面30%（±50）、资金面30%（±30）、情绪面20%、基本面20%（±25）
-  // 理论最高81分、最低19分，强买/卖出真实可达
+  // 方案B+周期面：技术面27%（±50）、资金面27%（±30）、情绪面18%、基本面18%（±25）、周期面10%（±20）
+  // 周期面来自宏观周期研判（价值发现者+指汇盈+兴业研究框架），权重小但提供行业beta方向
   const techScore = Math.max(-50, Math.min(50, trend.score * 10));
-  parts['技术面'] = techScore; score += techScore * 0.30;
+  parts['技术面'] = techScore; score += techScore * 0.27;
   const fundScore = Math.max(-30, Math.min(30, vol.score * 30));
-  parts['资金面'] = fundScore; score += fundScore * 0.30;
+  parts['资金面'] = fundScore; score += fundScore * 0.27;
   let baseScore = 0;
   if (finData.length) {
     const l = finData[0];
@@ -7945,14 +8070,21 @@ function scoreStock(trend, vol, finData) {
     if (l.rev_yoy !== null && l.rev_yoy !== undefined && l.rev_yoy > 10) baseScore += 5;
     else if (l.rev_yoy !== null && l.rev_yoy !== undefined && l.rev_yoy < -10) baseScore -= 5;
   }
-  parts['基本面'] = Math.max(-25, Math.min(25, baseScore)); score += parts['基本面'] * 0.20;
+  parts['基本面'] = Math.max(-25, Math.min(25, baseScore)); score += parts['基本面'] * 0.18;
   parts['消息面'] = 0; score += 0;
   let emoScore = 0;
   if (trend.status === '强势上升') emoScore = 10;
   else if (trend.status === '偏强震荡') emoScore = 5;
   else if (trend.status === '偏弱震荡') emoScore = -5;
   else emoScore = -10;
-  parts['情绪面'] = emoScore; score += emoScore * 0.20;
+  parts['情绪面'] = emoScore; score += emoScore * 0.18;
+  // 周期面：行业周期研判（复苏/景气加分，出清/过热减分）
+  let cycScore = 0, cycInfo = null;
+  if (industry && industry.cyc) {
+    cycScore = Math.max(-20, Math.min(20, industry.cyc.score || 0));
+    cycInfo = industry.cyc;
+  }
+  parts['周期面'] = cycScore; score += cycScore * 0.10;
   const final = Math.max(0, Math.min(100, 50 + score));
   let verdict, action;
   if (final >= 80) { verdict = '强买'; action = '重仓买入/持有'; }
@@ -7960,11 +8092,17 @@ function scoreStock(trend, vol, finData) {
   else if (final >= 50) { verdict = '观望'; action = '持有观察，不追高'; }
   else if (final >= 35) { verdict = '减仓'; action = '减仓防范风险，反弹至压力位减仓'; }
   else { verdict = '卖出'; action = '规避/清仓'; }
-  return { final: Math.round(final), verdict, action, parts };
+  return { final: Math.round(final), verdict, action, parts, cycInfo };
 }
-
-// 九转序列检测（近60根K线）
-function detectTD(klines) {
+// 周期阶段标签
+function cycleStageLabel(cycle) {
+  const map = { 0: '衰退出清期（回避/等待）', 1: '复苏初期（布局窗口）', 2: '景气上行期（持有/顺势）', 3: '过热/拥挤期（谨慎/减仓）', 4: '顶部回落期（规避）' };
+  return map[cycle] || '未知';
+}
+function cycleStageColor(cycle) {
+  const map = { 0: 'var(--red)', 1: 'var(--green)', 2: 'var(--green)', 3: 'var(--gold)', 4: 'var(--red)' };
+  return map[cycle] || 'var(--muted)';
+}function detectTD(klines) {
   const out = [];
   for (let i = Math.max(4, klines.length - 60); i < klines.length; i++) {
     let highCount = 0, lowCount = 0;
@@ -8140,7 +8278,7 @@ function renderResult(data, container) {
   const chgSign = chg >= 0 ? '+' : '';
   const trend = data.trend, macd = data.macd, vol = data.volume;
   const parts = score.parts || {};
-  const partNames = ['技术面', '资金面', '基本面', '消息面', '情绪面'];
+  const partNames = ['技术面', '资金面', '基本面', '周期面', '情绪面', '消息面'];
   const verdictColor = num >= 65 ? 'var(--green)' : (num >= 50 ? 'var(--gold)' : 'var(--red)');
   const verdictBg = num >= 65 ? 'rgba(63,185,80,.15)' : (num >= 50 ? 'rgba(240,185,11,.15)' : 'rgba(248,81,73,.15)');
 
@@ -8173,6 +8311,14 @@ function renderResult(data, container) {
       }).join('')}</div>
     </div>
   </div>
+  <div class="card"><h3>🌐 宏观周期研判</h3>
+    ${data.industry ? `<div class="suggestion-card" style="border-left:3px solid var(--gold)"><div class="lay-name">所属行业：${data.industry.name}（周期面 ${(data.score.parts['周期面']||0)>=0?'+':''}${data.score.parts['周期面']||0}）</div>
+      <div class="lay-body">📈 周期阶段：${data.industry.cyc ? cycleStageLabel(data.industry.cyc.cycle) : '--'}<br>💡 ${data.industry.cyc ? data.industry.cyc.note : '行业未覆盖，按中性处理'}</div></div>` : '<div class="suggestion-card"><div class="lay-name">行业周期</div><div class="lay-body">该股票行业未在周期库中收录，按中性处理。可查看框架速查-行业周期地图了解主要行业所处周期。</div></div>'}
+    <div class="suggestion-card" style="border-left:3px solid #388bfd"><div class="lay-name">大盘周期定位（兴业研究2026框架）</div>
+      <div class="lay-body">库存周期：被动补库→主动去库切换｜朱格拉：产能出清中段｜康波：第五轮萧条末→第六轮复苏初｜政策：宽松预期升温（7月PMI 49.2，"加大逆周期调节力度"再现）</div></div>
+    <div style="font-size:0.78em;color:var(--muted)">知识来源：兴业研究《鉴往知来：2026年所处经济周期》+ 价值发现者 + 指汇盈（2026-08更新）｜周期面权重10%，仅作行业beta参考</div>
+  </div>
+  
   <div class="card"><h3>🧭 五层框架建议</h3>
     ${data.suggestions.map(s => `<div class="suggestion-card"><div class="lay-name">${s.layer}</div><div class="lay-body">${s.content}</div></div>`).join('')}
   </div>
@@ -8679,7 +8825,11 @@ async function analyze(code) {
     const divergence = detectDivergence(klines, macdData);
     const tds = detectTD(klines);
     const vol = analyzeVolume(klines);
-    const score = scoreStock(trend, vol, finance);
+    const stockName = quote ? (quote.name || '') : (stockNameOf(input, '') || '');
+    const indName = stockIndustryOf(input, stockName);
+    const indCyc = indName ? industryCycleOf(indName) : null;
+    const industry = indName ? { name: indName, cyc: indCyc } : null;
+    const score = scoreStock(trend, vol, finance, industry);
     const last = klines[klines.length-1];
     const prev = klines[klines.length-2];
     const quoteData = quote || {
@@ -8704,7 +8854,7 @@ async function analyze(code) {
 
     renderResult({
       quote: quoteData, trend, macd: divergence, volume: vol, finance, news: news2,
-      announcements, klines, score, suggestions, signals
+      announcements, klines, score, suggestions, industry, signals
     }, 'result');
   } catch (e) {
     showError('error', '分析失败：' + e.message);
@@ -8727,7 +8877,7 @@ async function analyzeMarket(code) {
     const macd = calcMACD(klines);
     const div = detectDivergence(klines, macd);
     const vol = analyzeVolume(klines);
-    const score = scoreStock(trend, vol, finance);
+    const score = scoreStock(trend, vol, finance, null);
     const last = klines[klines.length-1];
     const prev = klines[klines.length-2];
     const quoteData = quote || {
@@ -8763,7 +8913,7 @@ async function analyzeCompare() {
       if (klines.length) {
         const trend = analyzeTrend(klines);
         const vol = analyzeVolume(klines);
-        const score = scoreStock(trend, vol, []);
+        const score = scoreStock(trend, vol, [], null);
         const last = klines[klines.length-1], prev = klines[klines.length-2];
         row = { ...row, name: quote?.name || '代码'+code, price: last.close, chg: prev ? (last.close-prev.close)/prev.close*100 : 0, score: score.final, verdict: score.verdict, status: trend.status, support: trend.low20, resist: trend.high20 };
       } else if (quote) {
