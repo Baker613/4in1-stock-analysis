@@ -195,16 +195,10 @@ th { background: rgba(255,255,255,.04); color: var(--gold); font-weight: 600; }
     <h3>📊 综合评分标准说明</h3>
     <div class="suggestion-card"><div class="lay-name">评分构成（满分100，基准50分）</div><div class="lay-body">综合评分 = 50 + 技术面(±50×0.30) + 资金面(±30×0.30) + 基本面(±25×0.20) + 情绪面(±10×0.20) + 消息面(当前为中性0分)。<br><b>技术面权重30%</b>：基于趋势评分（均线多空排列、20/60日线关系）映射，A股技术驱动强权重最高；<b>资金面权重30%</b>：基于量能评分（5日/20日量比，放量/缩量），资金面是A股核心驱动力；<b>基本面权重20%</b>：基于最新财报ROE>10%加10分、净利同比>20%加10分、营收同比>10%加5分，亏损减8分等；<b>情绪面权重20%</b>：趋势状态映射（强势上升+10、偏强震荡+5、偏弱震荡-5、弱势下行-10）。理论最高81分、最低19分。</div></div>
     <div class="card"><h3>🌐 行业周期地图（2026-08 研判）</h3>
-      <div style="font-size:0.8em;color:var(--muted);margin-bottom:6px">知识来源：指汇盈（药师）+ 价值发现者 + 兴业研究周期框架。复苏/景气行业=周期面加分；出清/过热行业=减分。</div>
-      ${Object.entries(CYCLE_KNOWLEDGE.industries).map(([name, v]) => `
-      <div class="suggestion-card" style="border-left:3px solid ${cycleStageColor(v.cycle)};padding:6px 10px;margin:4px 0">
-        <div class="lay-name" style="font-size:0.85em">${name} <span style="float:right;color:${cycleStageColor(v.cycle)}">${cycleStageLabel(v.cycle)} · 周期分${v.score>=0?'+':''}${v.score}</span></div>
-        <div class="lay-body" style="font-size:0.78em">${v.note}</div>
-      </div>`).join('')}
-      <div class="suggestion-card" style="border-left:3px solid #388bfd;padding:6px 10px;margin:6px 0 0">
-        <div class="lay-name" style="font-size:0.85em">📌 大盘周期定位</div>
-        <div class="lay-body" style="font-size:0.78em">${Object.entries(CYCLE_KNOWLEDGE.macro).map(([k, v]) => `${v.label}：<b>${v.stage}</b>（${v.detail}）`).join('<br>')}</div>
-      </div>
+    <div style="font-size:0.8em;color:var(--muted);margin-bottom:6px">知识来源：指汇盈（药师）+ 价值发现者 + 兴业研究周期框架。复苏/景气行业=周期面加分；出清/过热行业=减分。</div>
+    <div id="cycleMapContainer"></div>
+  </div>
+  
     </div>
     
       <div class="suggestion-card"><div class="lay-name">分级标准</div><div class="lay-body">≥80 <b>强买</b>（重仓买入/持有）｜65-79 <b>买入</b>（建仓/加仓）｜50-64 <b>观望</b>（持有观察，不追高）｜35-49 <b>减仓</b>（减仓防范风险，反弹至压力位减仓）｜&lt;35 <b>卖出</b>（规避/清仓）</div></div>
@@ -8102,7 +8096,30 @@ function cycleStageLabel(cycle) {
 function cycleStageColor(cycle) {
   const map = { 0: 'var(--red)', 1: 'var(--green)', 2: 'var(--green)', 3: 'var(--gold)', 4: 'var(--red)' };
   return map[cycle] || 'var(--muted)';
-}function detectTD(klines) {
+}
+
+// 行业周期地图填充（避免静态HTML模板转义问题，改为JS渲染）
+function renderCycleMap() {
+  const box = document.getElementById('cycleMapContainer');
+  if (!box || typeof CYCLE_KNOWLEDGE === 'undefined') return;
+  let html = '';
+  Object.entries(CYCLE_KNOWLEDGE.industries).forEach(function (kv) {
+    const name = kv[0], v = kv[1];
+    const color = cycleStageColor(v.cycle);
+    html += '<div class="suggestion-card" style="border-left:3px solid ' + color + ';padding:6px 10px;margin:4px 0">' +
+      '<div class="lay-name" style="font-size:0.85em">' + name + ' <span style="float:right;color:' + color + '">' + cycleStageLabel(v.cycle) + ' · 周期分' + (v.score >= 0 ? '+' : '') + v.score + '</span></div>' +
+      '<div class="lay-body" style="font-size:0.78em">' + v.note + '</div></div>';
+  });
+  html += '<div class="suggestion-card" style="border-left:3px solid #388bfd;padding:6px 10px;margin:6px 0 0">' +
+    '<div class="lay-name" style="font-size:0.85em">📌 大盘周期定位</div><div class="lay-body" style="font-size:0.78em">';
+  Object.entries(CYCLE_KNOWLEDGE.macro).forEach(function (kv) {
+    const v = kv[1];
+    html += v.label + '：<b>' + v.stage + '</b>（' + v.detail + '）<br>';
+  });
+  html += '</div></div>';
+  box.innerHTML = html;
+}
+renderCycleMap();function detectTD(klines) {
   const out = [];
   for (let i = Math.max(4, klines.length - 60); i < klines.length; i++) {
     let highCount = 0, lowCount = 0;
