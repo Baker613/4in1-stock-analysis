@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>波浪压力位可视化 - 卧龙电驱</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: "Microsoft YaHei", sans-serif; background: #0d1117; color: #e6edf3; padding: 12px; }
+h1 { font-size: 20px; margin-bottom: 4px; }
+.sub { color: #8b949e; font-size: 12px; margin-bottom: 12px; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+label { font-size: 13px; color: #8b949e; }
+input, select { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+button { background: #238636; border: none; color: #fff; padding: 5px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+button:hover { background: #2ea043; }
+#price { font-size: 26px; font-weight: bold; }
+.up { color: #f85149; } .down { color: #3fb950; }
+canvas { width: 100%; height: auto; background: #0d1117; border-radius: 6px; }
+.legend { font-size: 12px; margin-top: 6px; line-height: 1.8; }
+.legend span { display: inline-block; margin-right: 12px; }
+.p1 { color: #f85149; font-weight: bold; }
+.p2 { color: #d29922; font-weight: bold; }
+.p3 { color: #58a6ff; font-weight: bold; }
+.p4 { color: #bc8cff; font-weight: bold; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #21262d; }
+th { color: #8b949e; font-weight: normal; }
+.wave-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-right: 6px; }
+.w1 { background: #1f6feb33; color: #58a6ff; }
+.w2 { background: #8957e533; color: #bc8cff; }
+.w3 { background: #f8514933; color: #f85149; }
+.w4 { background: #d2992233; color: #d29922; }
+.w5 { background: #3fb95033; color: #3fb950; }
+.tip { font-size: 12px; color: #8b949e; margin-top: 8px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<h1>📊 波浪结构 + 压力位可视化</h1>
+<div class="sub" id="subtitle">数据源：腾讯K线（前复权）· 自动刷新</div>
+
+<div class="card">
+  <div class="row">
+    <label>股票代码：</label>
+    <input id="code" value="sh600580" style="width:100px">
+    <button onclick="loadAll()">分析</button>
+    <span id="price">--</span>
+    <span id="pct" style="font-size:14px"></span>
+  </div>
+</div>
+
+<div class="card">
+  <canvas id="chart" width="1100" height="620"></canvas>
+  <div class="legend">
+    <span class="p1">■ 关键压力（道氏高点/双顶）</span>
+    <span class="p2">■ 次级压力</span>
+    <span class="p3">■ 支撑</span>
+    <span class="p4">■ 波浪目标</span>
+    <span>☰ 均线 MA5/MA10/MA20/MA60</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="font-size:14px;margin-bottom:8px">🎯 逐级压力位（道氏高点）</h3>
+  <table id="ptable">
+    <tr><th>级别</th><th>价位</th><th>依据</th><th>强度</th></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="font-size:14px;margin-bottom:8px">🌊 波浪结构（艾略特）</h3>
+  <div id="waves"></div>
+  <div class="tip" id="wavetip"></div>
+</div>
+
+<div class="card">
+  <h3 style="font-size:14px;margin-bottom:8px">📐 关键价位地图</h3>
+  <div id="map" style="font-size:13px;line-height:2"></div>
+</div>
+
+<script>
+const COLORS = {
+  up: "#f85149", down: "#3fb950", ma5: "#f8e3a1", ma10: "#4da3ff",
+  ma20: "#ff9f43", ma60: "#c084fc", resist: "#f85149", support: "#3fb950",
+  wave: "#ffd166", grid: "#21262d", text: "#8b949e"
+};
+let KL = [];
+
+async function fetchK(code, n = 250) {
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,${n},qfq`;
+  const r = await fetch(url);
+  const j = await r.json();
+  const d = (j.data[code] && (j.data[code].qfqday || j.data[code].day)) || [];
+  return d.map(k => ({ date: k[0], open: +k[1], close: +k[2], high: +k[3], low: +k[4], vol: +k[5] }));
+}
+async function fetchRt(code) {
+  const r = await fetch(`https://qt.gtimg.cn/q=${code}`);
+  const t = await r.text();
+  const m = t.match(/"(.*)"/);
+  if (!m) return null;
+  const f = m[1].split("~");
+  return { name: f[1], price: +f[3], prev: +f[4], open: +f[5], high: +f[33], low: +f[34], pct: +f[32] };
+}
+function ma(arr, n) { if (arr.length < n) return null; return arr.slice(-n).reduce((s, v) => s + v, 0) / n; }
+
+// 道氏高点识别：3根内最高
+function findDowHighs(kl, minHigh) {
+  const out = [];
+  for (let i = 2; i < kl.length - 2; i++) {
+    const k = kl[i];
+    if (k.high >= kl[i-1].high && k.high >= kl[i-2].high &&
+        k.high >= kl[i+1].high && k.high >= kl[i+2].high && k.high > minHigh) {
+      out.push({ date: k.date, high: k.high });
+    }
+  }
+  return out;
+}
+
+async function loadAll() {
+  const code = document.getElementById("code").value.trim();
+  try {
+    const [kl, rt] = await Promise.all([fetchK(code), fetchRt(code)]);
+    if (!kl.length) { alert("无K线数据"); return; }
+    KL = kl;
+    if (rt) {
+      document.getElementById("price").textContent = `${rt.price}`;
+      document.getElementById("price").className = rt.pct >= 0 ? "up" : "down";
+      document.getElementById("pct").textContent = `${rt.pct >= 0 ? "+" : ""}${rt.pct}%`;
+      document.getElementById("subtitle").textContent = `${rt.name} (${code}) · 数据源：腾讯K线（前复权）· ${new Date().toLocaleString()}`;
+    }
+    drawChart(kl, rt);
+    renderPressureTable(kl, rt);
+    renderWaves(kl, rt);
+    renderMap(kl, rt);
+  } catch (e) {
+    alert("加载失败: " + e.message);
+  }
+}
+
+function drawChart(kl, rt) {
+  const cv = document.getElementById("chart");
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  const padL = 60, padR = 16, padT = 16, padB = 28;
+  const chartH = H - padT - padB - 100;
+  const volH = 80, volTop = H - padB - volH;
+  ctx.clearRect(0, 0, W, H);
+
+  const show = kl.slice(-80);
+  const closes = show.map(k => k.close);
+  const highs = show.map(k => k.high), lows = show.map(k => k.low);
+  const ma5a = [], ma10a = [], ma20a = [], ma60a = [];
+  show.forEach((_, i) => {
+    const seg = show.slice(0, i + 1).map(k => k.close);
+    ma5a.push(ma(seg, 5)); ma10a.push(ma(seg, 10)); ma20a.push(ma(seg, 20)); ma60a.push(ma(seg, 60));
+  });
+  const allVals = [...highs, ...lows, ...ma5a, ...ma10a, ...ma20a, ...ma60a].filter(v => v != null);
+  let minV = Math.min(...allVals), maxV = Math.max(...allVals);
+  const pad = (maxV - minV) * 0.08;
+  minV -= pad; maxV += pad;
+
+  const n = show.length;
+  const bw = (W - padL - padR) / n;
+  const Y = v => padT + (maxV - v) / (maxV - minV) * chartH;
+  const X = i => padL + bw * i + bw / 2;
+
+  // 网格
+  ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1; ctx.fillStyle = COLORS.text; ctx.font = "11px sans-serif";
+  for (let i = 0; i <= 5; i++) {
+    const v = minV + (maxV - minV) * i / 5;
+    const y = Y(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillText(v.toFixed(1), 4, y + 4);
+  }
+  // 日期刻度
+  for (let i = 0; i < n; i += 8) {
+    ctx.fillText(show[i].date.slice(5), X(i) - 14, H - padB + 14);
+  }
+
+  // 均线
+  const drawMA = (arr, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.beginPath();
+    let started = false;
+    arr.forEach((v, i) => {
+      if (v == null) return;
+      if (!started) { ctx.moveTo(X(i), Y(v)); started = true; }
+      else ctx.lineTo(X(i), Y(v));
+    });
+    ctx.stroke();
+  };
+  drawMA(ma5a, COLORS.ma5); drawMA(ma10a, COLORS.ma10); drawMA(ma20a, COLORS.ma20); drawMA(ma60a, COLORS.ma60);
+
+  // K线
+  show.forEach((k, i) => {
+    const x = X(i);
+    const up = k.close >= k.open;
+    ctx.strokeStyle = up ? COLORS.up : COLORS.down;
+    ctx.fillStyle = up ? COLORS.up : COLORS.down;
+    ctx.lineWidth = 1;
+    // 影线
+    ctx.beginPath(); ctx.moveTo(x, Y(k.high)); ctx.lineTo(x, Y(k.low)); ctx.stroke();
+    // 实体
+    const yO = Y(k.open), yC = Y(k.close);
+    const yTop = Math.min(yO, yC), hgt = Math.max(Math.abs(yO - yC), 1.5);
+    if (up) ctx.fillRect(x - bw * 0.32, yTop, bw * 0.64, hgt);
+    else ctx.fillRect(x - bw * 0.32, yTop, bw * 0.64, hgt);
+  });
+
+  // 量能
+  const maxVol = Math.max(...show.map(k => k.vol));
+  show.forEach((k, i) => {
+    const x = X(i);
+    const up = k.close >= k.open;
+    ctx.fillStyle = up ? "rgba(248,81,73,0.4)" : "rgba(63,185,80,0.4)";
+    const h = k.vol / maxVol * volH;
+    ctx.fillRect(x - bw * 0.32, volTop + volH - h, bw * 0.64, h);
+  });
+  ctx.fillStyle = COLORS.text;
+  ctx.fillText("成交量", padL + 4, volTop - 6);
+
+  // 压力位/支撑/波浪目标标注
+  const rtPrice = rt ? rt.price : closes[closes.length - 1];
+  const mark = (v, color, label, dash = true) => {
+    if (v < minV || v > maxV) return;
+    const y = Y(v);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.4;
+    ctx.setLineDash(dash ? [6, 4] : []);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color; ctx.font = "bold 11px sans-serif";
+    ctx.fillText(`${label} ${v.toFixed(2)}`, W - padR - ctx.measureText(`${label} ${v.toFixed(2)}`).width - 4, y - 4);
+  };
+  // 压力
+  [46.82, 46.49, 42.42, 40.98, 39.49, 39.08].forEach(v => mark(v, COLORS.resist, "压力", true));
+  // 支撑
+  [35.19, 34.67, 34.53].forEach(v => mark(v, COLORS.support, "支撑", true));
+  // 波浪目标
+  [43.36, 45.72, 48.73].forEach(v => mark(v, COLORS.wave, "3浪目标", true));
+  // 当前价
+  if (rtPrice > minV && rtPrice < maxV) {
+    mark(rtPrice, "#ffffff", `现价`, false);
+  }
+  // 波浪1/2浪标注
+  const lastIdx = show.length - 1;
+  ctx.fillStyle = COLORS.wave; ctx.font = "bold 12px sans-serif";
+  ctx.fillText("2浪底 34.67 (8-05)", padL + 8, Y(34.67) - 8);
+  ctx.fillText("3浪进行中→", padL + 8, Y(rtPrice) - 20);
+}
+
+function renderPressureTable(kl, rt) {
+  const tbody = document.getElementById("ptable");
+  const rows = [
+    ["P1", "39.08-39.49", "8-05高点 + 7-06高点（双顶+道氏趋势线）", "⭐⭐⭐ 最关键"],
+    ["P2", "40.98", "6-05高点", "⭐⭐"],
+    ["P3", "42.42", "5-08高点（5月启动平台）", "⭐⭐⭐ 强"],
+    ["P4", "46.49", "5-26高点（第一波顶）", "⭐⭐⭐ 最强"],
+    ["P5", "46.82", "2-24高点（年线顶）", "终极压力"],
+  ];
+  tbody.innerHTML = rows.map(r => `<tr><td class="p1">${r[0]}</td><td class="p1">${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join("");
+}
+
+function renderWaves(kl, rt) {
+  const div = document.getElementById("waves");
+  const tip = document.getElementById("wavetip");
+  const waves = [
+    ["1浪", "27.30 → 35.99", "+8.69 (+31.8%)", "7-20低点 → 8-04高点", "w1"],
+    ["2浪", "35.99 → 34.67", "-1.32 (-3.7%)", "浅回调（健康）", "w2"],
+    ["3浪", "34.67 → 进行中", "目标 43.36 / 45.72 / 48.73", "主升浪（1.618倍1浪）", "w3"],
+    ["4浪", "待3浪结束", "预期回撤41-42（0.382）", "3浪后回调", "w4"],
+    ["5浪", "待4浪结束", "冲48+（或更高）", "最后冲刺", "w5"],
+  ];
+  div.innerHTML = waves.map(w => `<div style="margin:6px 0"><span class="wave-badge ${w[4]}">${w[0]}</span><b>${w[1]}</b> <span style="color:#8b949e">${w[2]}</span><br><span style="font-size:12px;color:#8b949e;margin-left:4px">${w[3]}</span></div>`).join("");
+  tip.innerHTML = "⚠️ 数浪是概率判断，不是精确预测。若跌破 2 浪起点 34.67，则数浪失败（当前为反弹而非3浪）。3浪必须放量，缩量上涨到压力区警惕假突破。";
+}
+
+function renderMap(kl, rt) {
+  const div = document.getElementById("map");
+  const rtPrice = rt ? rt.price : (kl[kl.length-1] || {}).close;
+  const items = [
+    ["48.73", "3浪1.618倍目标（5浪区域，终极止盈）", "wave"],
+    ["46.82", "年线高点（强压力，减仓区）", "resist"],
+    ["46.49", "5月顶（强压力，减仓区）", "resist"],
+    ["45.72", "3浪1.272倍", "wave"],
+    ["43.36", "3浪1.0倍（压力带上沿）", "wave"],
+    ["42.42", "5月平台（突破后加仓确认位）", "resist"],
+    ["40.98", "6月高点（减1/3）", "resist"],
+    ["39.49", "7月顶+道氏趋势线（突破=趋势确认，加仓）", "resist"],
+    ["39.08", "8月次高（第一道坎）", "resist"],
+    [`${rtPrice.toFixed(2)}`, "现价", "now"],
+    ["36.37", "MA5（短线支撑）", "support"],
+    ["35.19", "MA60（生命线，跌破减半）", "support"],
+    ["34.67", "2浪起点（跌破清仓）", "support"],
+    ["34.53", "今日低点", "support"],
+  ];
+  const colorOf = t => t === "resist" ? "#f85149" : t === "support" ? "#3fb950" : t === "wave" ? "#ffd166" : "#ffffff";
+  div.innerHTML = items.map(i => `<div><span style="display:inline-block;width:60px;font-weight:bold;color:${colorOf(i[2])}">${i[0]}</span><span style="color:#8b949e">${i[1]}</span></div>`).join("");
+}
+
+loadAll();
+setInterval(loadAll, 60000); // 每分钟自动刷新
+</script>
+</body>
+</html>
