@@ -377,8 +377,8 @@ async function getKline(code, years = 5) {
   const thisYear = new Date().getFullYear();
   for (let y = thisYear - years + 1; y <= thisYear; y++) {
     try {
-      // 指数代码转换：上证指数 000001 → 1A0001（同花顺），其余指数直用
-      const idxMap = { '000001': '1A0001', '000300': '000300', '000905': '000905', '000688': '000688' };
+      // 指数代码转换：上证指数 000001 直用（同花顺 hs_000001），其余指数直用
+      const idxMap = { '000001': '000001', '000300': '000300', '000905': '000905', '000688': '000688' };
       const kCode = (idxMap[code] || code); // 指数映射 / 板块BK直用
       const r = await fetch('https://d.10jqka.com.cn/v4/line/hs_' + kCode + '/01/' + y + '.js', {
         headers: { 'Referer': 'https://www.10jqka.com.cn/' }
@@ -9143,6 +9143,23 @@ function calcJiuquTrend(klines) {
 }
 
 // ============ 大盘分析 ============
+// 指数专用K线：优先东方财富(push2his，CORS友好、代码格式确定)，回退同花顺
+async function getIndexKlineEM(code, years = 5) {
+  const secidMap = { '000001':'1.000001','399001':'0.399001','399006':'0.399006','000300':'1.000300','000905':'1.000905','000688':'1.000688' };
+  const secid = secidMap[code] || ('1.'+code);
+  const end = Math.floor(Date.now()/1000);
+  const begin = end - years*365*24*3600;
+  const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58&klt=101&fqt=1&secid='+secid+'&beg='+begin+'&end='+end;
+  const txt = await (await fetch(url)).text();
+  const m = txt.match(/\"klines\":\[(.*?)\]/);
+  if (!m) return null;
+  return m[1].split(',').map(s=>s.replace(/&quot;/g,'"')).join(',').match(/"(\d{4}-\d{2}-\d{2})",[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+/g) || [];
+}
+async function getIndexKline(code, years = 5) {
+  const r = await getIndexKlineEM(code, years);
+  if (r && r.length) return r;
+  return await getKline(code, years); // 回退同花顺
+}
 async function analyzeMarket(code) {
   let input = (code || $('marketInput').value || '000001').trim();
   // 支持指数/股票名称输入
@@ -9168,7 +9185,8 @@ async function analyzeMarket(code) {
     if (isBoard) {
       klines = await getBoardKline(input, 3);
     } else {
-      klines = await getKline(input, 3);
+      // 指数优先走东财(代码格式确定)，失败回退同花顺——修复"大盘分析"长期取不到指数数据
+      klines = await getIndexKline(input, 3);
     }
     if (!klines.length) { showError('errorMarket', '未获取到指数数据，请检查代码'); return; }
     const finance = [], quote = await getQuote(input).catch(() => null);
