@@ -8076,7 +8076,15 @@ function detectDivergence(klines, macd, lookback = 250) {
   else signals.push('➖ MACD零轴附近 (DIF=' + lastDif.toFixed(3) + ')');
   const hasTop = signals.some(s => s.includes('顶背离'));
   const hasBottom = signals.some(s => s.includes('底背离'));
-  return { signals, lastDif, lastDea, lastHist, top: hasTop, bottom: hasBottom };
+  // 提取背离点真实价位（用于参考价）
+  let topPrice = null, bottomPrice = null;
+  signals.forEach(s => {
+    const m = s.match(/顶背离.*?价格(d+.?d*)/);
+    if (m) topPrice = parseFloat(m[1]);
+    const m2 = s.match(/底背离.*?价格(d+.?d*)/);
+    if (m2) bottomPrice = parseFloat(m2[1]);
+  });
+  return { signals, lastDif, lastDea, lastHist, top: hasTop, bottom: hasBottom, topPrice, bottomPrice };
 }
 
 function analyzeVolume(klines) {
@@ -8229,30 +8237,62 @@ function calcSignals(klines, trend, macd, vol, div, score, k60min) {
   const above20 = close > ma20, above60 = ma60 !== null && close > ma60;
 
   const buys = [], sells = [];
-  // ===== 买点信号（含具体价位） =====
-  if ((div.signals || []).some(s => s.includes('底背离'))) buys.push('底背离结构（九曲：DIFF转向确认底部，波段买点）参考价：' + fmtPrice(close) + '，可分批低吸');
+  // ===== 背离信号互斥逻辑 =====
+  // 只保留与趋势方向一致的背离：上升趋势中保留底背离，下降趋势中保留顶背离
+  // div.topPrice/bottomPrice 为背离点的真实价位（已从 detectDivergence 获取）
+  const isUptrend = trend.score > 0 && above20 && above60;
+  const isDowntrend = trend.score < 0 || (!above20 && !above60);
+  const hasTopDiv = div.top === true;
+  const hasBotDiv = div.bottom === true;
+  // 趋势向上时：底背离是买点，顶背离是次要警示（放在备注而非卖点）
+  // 趋势向下时：顶背离是卖点，底背离是次要警示
+  // 趋势中性时：两者均有效（视具体价格关系判断）
+  if (hasTopDiv && !hasBotDiv) {
+    sells.push('顶背离结构（九曲：顶部结构减仓信号）参考价：' + fmtPrice(div.topPrice || close) + '，反弹分批减仓');
+  } else if (hasBotDiv && !hasTopDiv) {
+    buys.push('底背离结构（九曲：DIFF转向确认底部，波段买点）参考价：' + fmtPrice(div.bottomPrice || close) + '，可分批低吸');
+  } else if (hasTopDiv && hasBotDiv) {
+    // 两者同时存在：按趋势方向决定主要方向，次要方向降级为提示
+    if (isUptrend) {
+      buys.push('底背离结构（九曲：DIFF转向确认底部，波段买点）参考价：' + fmtPrice(div.bottomPrice || close) + '，可分批低吸');
+      sells.push('⚠️顶背离已触发（九曲：上升趋势中顶背离影响减弱，但仍需关注）参考价：' + fmtPrice(div.topPrice || close));
+    } else if (isDowntrend) {
+      sells.push('顶背离结构（九曲：顶部结构减仓信号）参考价：' + fmtPrice(div.topPrice || close) + '，反弹分批减仓');
+      buys.push('⚠️底背离已触发（九曲：下降趋势中底背离可能被延后，等待确认）参考价：' + fmtPrice(div.bottomPrice || close));
+    } else {
+      // 中性趋势：按背离价格判断（哪个背离点离现价更近更有意义）
+      const botDist = div.bottomPrice ? Math.abs(close - div.bottomPrice) / close : Infinity;
+      const topDist = div.topPrice ? Math.abs(close - div.topPrice) / close : Infinity;
+      if (botDist < topDist) {
+        buys.push('底背离结构（九曲：离现价更近，优先关注）参考价：' + fmtPrice(div.bottomPrice || close) + '，可分批低吸');
+        sells.push('⚠️顶背离已触发（参考）参考价：' + fmtPrice(div.topPrice || close));
+      } else {
+        sells.push('顶背离结构（九曲：离现价更近，优先关注）参考价：' + fmtPrice(div.topPrice || close) + '，反弹分批减仓');
+        buys.push('⚠️底背离已触发（参考）参考价：' + fmtPrice(div.bottomPrice || close));
+      }
+    }
+  }
+  // ===== 其他买卖点信号（不受影响） =====
   if (lastLow9 && (n - 1 - klines.indexOf(lastLow9)) <= 10) buys.push('低9出现（九曲：钝化+9最强组合，抢跑加仓信号）低9价：' + fmtPrice(lastLow9.price) + '，止损设其下方');
   if (channelPos < 0.2) buys.push('贴近通道下轨区（徐小明：通道下沿关注企稳）下轨参考：' + fmtPrice(low60) + '，企稳收阳可试仓');
   if (chgFromLow < 10) buys.push('波段低点区域+'+chgFromLow.toFixed(0)+'%（Wu2198：低点布局区，分批低买）低点：' + fmtPrice(low120) + '，跌破则离场');
   if (div.signals.some(s => s.includes('金叉'))) buys.push('MACD金叉（趋势启动确认）金叉位：' + fmtPrice(close) + '，回踩不破可加仓');
   if (above20 && trend.score >= 1) buys.push('站上20日线'+fmtPrice(ma20)+'+趋势转强（徐小明：趋势为王顺势买回调）回踩'+fmtPrice(ma20)+'不破可买');
-  // ===== 卖点信号（含具体价位） =====
-  if (div.signals.some(s => s.includes('顶背离'))) sells.push('顶背离结构（九曲：顶部结构减仓信号）参考价：' + fmtPrice(close) + '，反弹分批减仓');
   if (lastHigh9 && (n - 1 - klines.indexOf(lastHigh9)) <= 10) sells.push('高9出现（九曲：钝化+9抢跑减仓）高9价：' + fmtPrice(lastHigh9.price) + '，冲高兑现');
   if (channelPos > 0.8) sells.push('贴近通道上轨（徐小明：通道上沿注意回落）上轨参考：' + fmtPrice(high60) + '，冲高减仓不追');
   if (chgFromLow > 50) sells.push('已脱离波段低点'+chgFromLow.toFixed(0)+'%（Wu2198：不追高，追高就输了80%）现价较低点已涨'+fmtPrice(close - low120)+'，回调风险大');
-  // 次级别（60分钟）确认：60分结构=背离，日线看多+60分底背离=加分，日线看空+60分顶背离=加分
+  // ===== 60分钟次级别（只进一个方向，与主要趋势对齐）=====
   if (k60min && k60min.length >= 30) {
     const m60 = calcMACD(k60min);
     const d60 = detectDivergence(k60min, m60);
-    // 日线有买点+60分底背离 → 双周期共振，追加买点标签
-    if (buys.length > 0 && d60 && d60.bottom) buys.push('次级别(60分钟)底背离确认·共振加强（九曲闲人：多周期结构协调性放大）');
-    // 日线有卖点+60分顶背离 → 双周期共振，追加卖点标签
-    if (sells.length > 0 && d60 && d60.top) sells.push('次级别(60分钟)顶背离确认·共振加强（九曲闲人：多周期结构协调性放大）');
-    // 日线有买点但60分顶背离 → 弱化买点
-    if (buys.length > 0 && d60 && d60.top && !(d60 && d60.bottom)) buys.push('⚠️次级别(60分钟)顶背离·日线买点需等待60分修复（九曲闲人：孤掌难鸣）');
-    // 日线有卖点但60分底背离 → 弱化卖点
-    if (sells.length > 0 && d60 && d60.bottom && !(d60 && d60.top)) sells.push('⚠️次级别(60分钟)底背离·日线卖点可能提前结束（九曲闲人：小周期结构可能抵抗）');
+    // 60分钟顶背离 → 只进卖点（作为减仓警示）
+    if (d60 && d60.top) {
+      sells.push('次级别(60分钟)顶背离（九曲闲人：注意短期回落风险）60分参考：' + fmtPrice(d60.topPrice || close));
+    }
+    // 60分钟底背离 → 只进买点（作为企稳信号）
+    if (d60 && d60.bottom) {
+      buys.push('次级别(60分钟)底背离（九曲闲人：关注短期企稳机会）60分参考：' + fmtPrice(d60.bottomPrice || close));
+    }
   }
   if (div.signals.some(s => s.includes('死叉'))) sells.push('MACD死叉（趋势转弱）死叉位：' + fmtPrice(close) + '，反抽减仓');
   if (!above20) sells.push('跌破20日线'+fmtPrice(ma20)+'（短期趋势走弱，减仓观察）反抽'+fmtPrice(ma20)+'不收复则离场');
