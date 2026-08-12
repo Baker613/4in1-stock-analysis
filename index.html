@@ -8013,27 +8013,58 @@ function analyzeTrend(klines) {
   return { score, status, suggestion, signals, ma5: ma5[last], ma10: ma10[last], ma20: ma20[last], ma60: ma60[last], close, high20, low20, high60, low60 };
 }
 
-function detectDivergence(klines, macd, lookback = 60) {
+function detectDivergence(klines, macd, lookback = 250) {
   const n = Math.min(lookback, klines.length);
   const seg = klines.slice(-n), difSeg = macd.dif.slice(-n);
   const signals = [];
+  // ===== 顶背离（徐小明标准）：最近高点价格>=前高*0.97（持平/新高），但DIF明显走低(>0.05) =====
   const priceHighs = [];
   for (let i = 2; i < seg.length - 2; i++) {
-    if (seg[i].high > seg[i-1].high && seg[i].high > seg[i-2].high && seg[i].high > seg[i+1].high && seg[i].high > seg[i+2].high)
-      priceHighs.push({ idx: i, price: seg[i].high, dif: difSeg[i] });
+    if (seg[i].high >= seg[i-1].high && seg[i].high >= seg[i-2].high &&
+        seg[i].high >= seg[i+1].high && seg[i].high >= seg[i+2].high &&
+        (seg[i].high > seg[i-1].high || seg[i].high > seg[i+1].high))
+      priceHighs.push({ idx: i, price: seg[i].high, dif: difSeg[i], date: seg[i].date });
   }
+  // 找最近一个显著高点（价格>=区间最高*0.93），与其之前的最高点比较
   if (priceHighs.length >= 2) {
-    const p1 = priceHighs[priceHighs.length-2], p2 = priceHighs[priceHighs.length-1];
-    if (p2.price > p1.price && p2.dif < p1.dif) signals.push('⚠️ 顶背离: 价格新高(' + p2.price + ') 但DIFF下降 (' + p2.dif.toFixed(3) + ' < ' + p1.dif.toFixed(3) + ')');
+    const last = priceHighs[priceHighs.length - 1];
+    // 找 last 之前的最高点（价格不低于 last 的 97%）
+    const prior = priceHighs.filter(p => p.idx < last.idx && p.price >= last.price * 0.97 && last.price >= p.price * 0.97);
+    if (prior.length) {
+      const p1 = prior[prior.length - 1];
+      if (last.dif < p1.dif - 0.05) {
+        signals.push('⚠️ 顶背离: 价格' + last.price + '接近/高于前高' + p1.price + '，但DIFF下降 (' + last.dif.toFixed(3) + ' < ' + p1.dif.toFixed(3) + ')');
+      }
+    } else {
+      // 无持平前高，则用简单规则：价格创新高但DIF走低
+      const p1 = priceHighs[priceHighs.length - 2];
+      if (last.price > p1.price && last.dif < p1.dif - 0.05) {
+        signals.push('⚠️ 顶背离: 价格新高(' + last.price + ') 但DIFF下降 (' + last.dif.toFixed(3) + ' < ' + p1.dif.toFixed(3) + ')');
+      }
+    }
   }
+  // ===== 底背离（对称逻辑）=====
   const priceLows = [];
   for (let i = 2; i < seg.length - 2; i++) {
-    if (seg[i].low < seg[i-1].low && seg[i].low < seg[i-2].low && seg[i].low < seg[i+1].low && seg[i].low < seg[i+2].low)
-      priceLows.push({ idx: i, price: seg[i].low, dif: difSeg[i] });
+    if (seg[i].low <= seg[i-1].low && seg[i].low <= seg[i-2].low &&
+        seg[i].low <= seg[i+1].low && seg[i].low <= seg[i+2].low &&
+        (seg[i].low < seg[i-1].low || seg[i].low < seg[i+1].low))
+      priceLows.push({ idx: i, price: seg[i].low, dif: difSeg[i], date: seg[i].date });
   }
   if (priceLows.length >= 2) {
-    const p1 = priceLows[priceLows.length-2], p2 = priceLows[priceLows.length-1];
-    if (p2.price < p1.price && p2.dif > p1.dif) signals.push('🔻 底背离: 价格新低(' + p2.price + ') 但DIFF抬高 (' + p2.dif.toFixed(3) + ' > ' + p1.dif.toFixed(3) + ')');
+    const last = priceLows[priceLows.length - 1];
+    const prior = priceLows.filter(p => p.idx < last.idx && p.price <= last.price * 1.03 && last.price <= p.price * 1.03);
+    if (prior.length) {
+      const p1 = prior[prior.length - 1];
+      if (last.dif > p1.dif + 0.05) {
+        signals.push('🔻 底背离: 价格' + last.price + '接近/低于前低' + p1.price + '，但DIFF抬高 (' + last.dif.toFixed(3) + ' > ' + p1.dif.toFixed(3) + ')');
+      }
+    } else {
+      const p1 = priceLows[priceLows.length - 2];
+      if (last.price < p1.price && last.dif > p1.dif + 0.05) {
+        signals.push('🔻 底背离: 价格新低(' + last.price + ') 但DIFF抬高 (' + last.dif.toFixed(3) + ' > ' + p1.dif.toFixed(3) + ')');
+      }
+    }
   }
   const lastDif = macd.dif[macd.dif.length-1], lastDea = macd.dea[macd.dea.length-1], lastHist = macd.hist[macd.hist.length-1];
   const gc = lastDif > lastDea && macd.dif[macd.dif.length-2] <= macd.dea[macd.dea.length-2];
@@ -8043,7 +8074,9 @@ function detectDivergence(klines, macd, lookback = 60) {
   if (lastDif > 0 && lastHist > 0) signals.push('✅ MACD多头区域 (DIF=' + lastDif.toFixed(3) + ')');
   else if (lastDif < 0 && lastHist < 0) signals.push('⚠️ MACD空头区域 (DIF=' + lastDif.toFixed(3) + ')');
   else signals.push('➖ MACD零轴附近 (DIF=' + lastDif.toFixed(3) + ')');
-  return { signals, lastDif, lastDea, lastHist };
+  const hasTop = signals.some(s => s.includes('顶背离'));
+  const hasBottom = signals.some(s => s.includes('底背离'));
+  return { signals, lastDif, lastDea, lastHist, top: hasTop, bottom: hasBottom };
 }
 
 function analyzeVolume(klines) {
@@ -8883,7 +8916,7 @@ async function analyze(code) {
     const suggestions = [
       { layer: '① 方向层', content: '宏观方向需结合大盘与产业周期判断。个股层面：' + (trend.status.includes('强势') ? '趋势向上，与多头方向共振，关注产业主线（科技/消费/周期）景气度。' : '趋势偏弱，注意控制仓位，等待方向明确。') },
       { layer: '② 趋势层', content: '趋势状态：' + trend.status + '。' + trend.signals.filter(s => s.includes('✓') || s.includes('⚠') || s.includes('📈')).slice(0, 3).join('；') + '。' + trend.suggestion },
-      { layer: '③ 结构层', content: divergence.signals && divergence.signals.length ? divergence.signals.join('；') : '近期无明确背离结构；注意九转序列与MACD共振信号。' },
+      { layer: '③ 结构层', content: (function(){ const d60txt = k60m && k60m.length >= 30 ? (function(){ const m = calcMACD(k60m); const d = detectDivergence(k60m, m); const t = d.top ? '⚠️ 60分钟顶背离：次级别动能衰竭，注意回落' : ''; const b = d.bottom ? '🔻 60分钟底背离：次级别动能转强，关注企稳' : ''; return [t, b].filter(Boolean).join('；'); })() : ''; const dTxt = divergence.signals && divergence.signals.length ? divergence.signals.join('；') : '近期日线无明确背离结构'; return [dTxt, d60txt].filter(Boolean).join('；'); })() },
       { layer: '④ 点位层', content: '短期支撑 ' + trend.low20 + ' / 短期压力 ' + trend.high20 + '；中期支撑 ' + trend.low60 + ' / 中期压力 ' + trend.high60 + '。支撑位附近可试探，破位则止损。' },
       { layer: '⑤ 纪律层', content: '综合评分 ' + score.final + ' 分（' + score.verdict + '）。' + (score.final < 50 ? '风险较高：建议严格止损、不急于抄底，等底部结构（60分钟以上周期）确认。' : '风险中等：建议分批操作、不追高，先设止损再买股。') }
     ];
