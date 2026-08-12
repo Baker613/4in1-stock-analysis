@@ -9119,7 +9119,7 @@ function calcJiuquTrend(klines) {
   else if (jiu9down) signal = '连续' + downCount + '根阴线 🔔 注意反弹机会';
   else signal = '暂无明确趋势信号，等待方向明确';
   // 纠错标准（九曲核心）：趋势破位即纠错止损
-  const stopLoss = aboveMA20 ? (curMA20 * 0.99).toFixed(2) : (curMA60 * 0.99).toFixed(2);
+  const stopLoss = +(aboveMA20 ? (curMA20 * 0.99).toFixed(2) : (curMA60 * 0.99).toFixed(2));
   return {
     curMA20: +curMA20.toFixed(2),
     curMA60: +curMA60.toFixed(2),
@@ -9143,8 +9143,11 @@ function calcJiuquTrend(klines) {
 }
 
 // ============ 大盘分析 ============
-// 指数专用K线：东方财富push2his（数据准、格式确定）
-// GitHub Pages等纯前端环境通过CORS代理访问；localhost直连优先（更快）
+// 指数K线多源策略（优先级从高到低）：
+//   ① 东方财富push2his（数据最准，需CORS代理/localhost）
+//   ② 腾讯data.gtimg.cn（.js文件无跨域，纯前端首选fallback）
+//   ③ 新浪finance.sina.com.cn（JSONP无跨域）
+//   ④ 个股接口回退（部分指数代码也有数据）
 const CORS_PROXIES = [
   '',                                    // 0=直连(localhost/有后端时优先)
   'https://api.allorigins.win/raw?url=', // 1=免费CORS代理
@@ -9161,6 +9164,8 @@ async function fetchWithProxy(rawUrl) {
   }
   throw lastErr || new Error('所有数据源均不可用');
 }
+
+// ── 数据源①：东方财富push2his ──
 async function getIndexKlineEM(code, years = 5) {
   const secidMap = { '000001':'1.000001','399001':'0.399001','399006':'0.399006','000300':'1.000300','000905':'1.000905','000688':'1.000688' };
   const secid = secidMap[code] || ('1.'+code);
@@ -9172,13 +9177,89 @@ async function getIndexKlineEM(code, years = 5) {
   if (!m) return null;
   return m[1].split(',').map(s=>s.replace(/&quot;/g,'"')).join(',').match(/"(\d{4}-\d{2}-\d{2})",[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+/g) || [];
 }
+
+// ── 数据源②：腾讯data.gtimg.cn（.js文件，script标签加载，零跨域问题）──
+async function getIndexKlineTX(code, years = 3) {
+  const prefix = (code.startsWith('0')||code.startsWith('3')||code.startsWith('5')) ? 'sz' : 'sh';
+  const txCode = prefix + code;
+  return new Promise((resolve, reject) => {
+    const results = []; let done = 0; let timeoutId;
+    const curYear = new Date().getFullYear();
+    const urls = [`https://data.gtimg.cn/flashdata/hushen/latest/daily/${txCode}.js`];
+    for (let y = curYear; y >= curYear - years + 1 && y >= 24; y--)
+      urls.push(`https://data.gtimg.cn/flashdata/hushen/daily/${String(y).slice(-2)}/${txCode}.js`);
+    const finish = () => {
+      clearTimeout(timeoutId);
+      if (results.length > 0) resolve(results);
+      else reject(new Error('腾讯K线数据为空'));
+    };
+    timeoutId = setTimeout(() => { if (done < urls.length) finish(); }, 12000);
+    urls.forEach(url => {
+      const s = document.createElement('script');
+      s.onload = () => {
+        done++;
+        // 腾讯返回全局变量 latest_daily 或 daily_xxx，每行是一个数组字符串
+        try {
+          if (window.latest_daily && Array.isArray(window.latest_daily)) {
+            results.push(...window.latest_daily); delete window.latest_daily;
+          } else {
+            // 扫描可能的全局变量名
+            for (const k of Object.keys(window)) {
+              if ((k.startsWith('latest_')||k.startsWith('daily_'))&&Array.isArray(window[k])) {
+                results.push(...window[k]); delete window[k]; break;
+              }
+            }
+          }
+        } catch(e){/*ignore*/}
+        document.head.removeChild(s);
+        if (done >= urls.length) finish();
+      };
+      s.onerror = () => { done++; if (done >= urls.length) finish(); };
+      s.src = url; document.head.appendChild(s);
+    });
+  }).then(raw => parseTXKlineData(raw));
+}
+function parseTXKlineData(arr) {
+  if (!arr || !arr.length) return [];
+  return arr.map(row => {
+    // 腾讯格式：[日期, 开盘, 收盘, 最高, 最低, 成交量(手), 成交额] 或 字符串
+    const d = typeof row === 'string' ? row.split(',') : row;
+    if (!d || d.length < 5) return null;
+    return { date:String(d[0]).replace(/^(\d{2})/,(y)=>((+y>30?'19':'20')+y)), open:+d[1], close:+d[2], high:+d[3], low:+d[4], volume:+(d[5]||0), amount:+(d[6]||0) };
+  }).filter(r=>r&&r.date&&r.close>0);
+}
+
+// ── 数据源③：新浪K线JSONP ──
+async function getIndexKlineSina(code, years = 3) {
+  const prefix = (code.startsWith('6')||code==='000001') ? 'sh' : 'sz';
+  return new Promise((resolve, reject) => {
+    const cb = '__sina_kline_'+Date.now();
+    window[cb] = function(data) {
+      delete window[cb];
+      document.head.removeChild(script);
+      if (data && Array.isArray(data)) resolve(data.map(d=>({
+        date:d.day,open:+d.open,close:+d.close,high:+d.high,low:+d.low,volume:+(d.volume||0)
+      })).filter(d=>d.date&&d.close>0));
+      else reject(new Error('新浪K线解析失败'));
+    };
+    const script = document.createElement('script');
+    script.src = `https://finance.sina.com.cn/realstock/company/${prefix}${code}/kline.shtml?symbol=${prefix}${code}&scale=1440&ma=no&datalen=${years*250}&callback=${cb}`;
+    script.onerror = ()=>{delete window[cb];reject(new Error('新浪K线加载失败'));};
+    document.head.appendChild(script);
+    setTimeout(()=>{if(window[cb]){delete window[cb];reject(new Error('新浪K线超时'));}},10000);
+  });
+}
+
+// ── 统一入口：依次尝试各数据源 ──
 async function getIndexKline(code, years = 5) {
-  try {
-    const r = await getIndexKlineEM(code, years);
-    if (r && r.length) return r;
-  } catch(e) { console.warn('指数K线获取失败:', e.message); }
-  // 回退：尝试个股接口（部分指数代码在个股接口也有数据）
-  try { return await getKline(code, years); } catch(e2) {}
+  // ① 东财（最准）
+  try { const r = await getIndexKlineEM(code, years); if (r && r.length) { console.log('[大盘]东财成功:',r.length,'条'); return r; } } catch(e) { console.warn('[大盘]东财失败:',e.message); }
+  // ② 腾讯（无跨域）
+  try { const r = await getIndexKlineTX(code, years); if (r && r.length) { console.log('[大盘]腾讯成功:',r.length,'条'); return r; } } catch(e) { console.warn('[大盘]腾讯失败:',e.message); }
+  // ③ 新浪JSONP
+  try { const r = await getIndexKlineSina(code, years); if (r && r.length) { console.log('[大盘]新浪成功:',r.length,'条'); return r; } } catch(e) { console.warn('[大盘]新浪失败:',e.message); }
+  // ④ 回退个股接口
+  try { const r = await getKline(code, years); if (r && r.length) { console.log('[大盘]个股接口成功:',r.length,'条'); return r; } } catch(e) {}
   return [];
 }
 async function analyzeMarket(code) {
