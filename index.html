@@ -377,7 +377,9 @@ async function getKline(code, years = 5) {
   const thisYear = new Date().getFullYear();
   for (let y = thisYear - years + 1; y <= thisYear; y++) {
     try {
-      const kCode = code; // 板块代码 BK/BK0 已可直接拼 hs_ 前缀
+      // 指数代码转换：上证指数 000001 → 1A0001（同花顺），其余指数直用
+      const idxMap = { '000001': '1A0001', '000300': '000300', '000905': '000905', '000688': '000688' };
+      const kCode = (idxMap[code] || code); // 指数映射 / 板块BK直用
       const r = await fetch('https://d.10jqka.com.cn/v4/line/hs_' + kCode + '/01/' + y + '.js', {
         headers: { 'Referer': 'https://www.10jqka.com.cn/' }
       });
@@ -7881,7 +7883,9 @@ function stockNameOf(code, fallback) {
 
 // 3. 腾讯行情（script标签加载，v_sh600977="..."格式，~分隔）
 function getQuote(code) {
-  const prefix = code.startsWith('6') ? 'sh' : (code.startsWith('4') || code.startsWith('8') ? 'bj' : 'sz');
+  // 指数：上证000001/沪深300/中证500/科创50 → sh前缀；深成/创业板 → sz前缀
+  const idxPrefix = { '000001': 'sh', '000300': 'sh', '000905': 'sh', '000688': 'sh', '399001': 'sz', '399006': 'sz' };
+  const prefix = idxPrefix[code] || (code.startsWith('6') ? 'sh' : (code.startsWith('4') || code.startsWith('8') ? 'bj' : 'sz'));
   const symbol = prefix + code;
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
@@ -7895,10 +7899,10 @@ function getQuote(code) {
       const f = raw.split('~');
       resolve({
         name: f[1], code: f[2],
-        price: +f[3], prev_close: +f[4], open: +f[5],
+        price: idxPrefix[code] ? +f[3] / 100 : +f[3], prev_close: idxPrefix[code] ? +f[4] / 100 : +f[4], open: idxPrefix[code] ? +f[5] / 100 : +f[5],
         vol: +f[6], amount: +f[37] || 0,
         change_pct: +f[32],
-        high: +f[33], low: +f[34],
+        high: idxPrefix[code] ? +f[33] / 100 : +f[33], low: idxPrefix[code] ? +f[34] / 100 : +f[34],
         pe: +f[39] || null, pb: +f[46] || null,
         date: f[30]
       });
