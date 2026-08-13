@@ -9320,8 +9320,30 @@ async function analyzeMarket(code) {
 }
 
 // ============ 市场热榜（数据服务版） ============
-const DATA_SVC = 'http://localhost:8900/api/';
+const DATA_SVC_TUNNEL = 'https://scenario-tampa-zum-instead.trycloudflare.com/api/';
+const DATA_SVC_LOCAL = 'http://localhost:8900/api/';
+let DATA_SVC = DATA_SVC_TUNNEL; // 默认公网隧道（GitHub Pages可用），本地环境自动回退
+// 本地访问时优先走 localhost（更快），公网访问走隧道
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  DATA_SVC = DATA_SVC_LOCAL;
+}
 async function hotFetch(cmd, params = {}) {
+  // 首次请求测试连通性：若隧道不通且在本机，回退 localhost
+  if (window.__svcOk !== true) {
+    try {
+      const t0 = await fetch(DATA_SVC + 'health', { signal: AbortSignal.timeout(8000) });
+      window.__svcOk = t0.ok;
+    } catch (e) {
+      window.__svcOk = false;
+      if (window.__localTried !== true && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+        window.__localTried = true;
+        try {
+          const t1 = await fetch(DATA_SVC_LOCAL + 'health', { signal: AbortSignal.timeout(5000) });
+          if (t1.ok) { DATA_SVC = DATA_SVC_LOCAL; window.__svcOk = true; }
+        } catch (e2) {}
+      }
+    }
+  }
   const q = Object.entries(params).map(([k,v]) => k + '=' + encodeURIComponent(v)).join('&');
   const r = await fetch(DATA_SVC + cmd + (q ? '?' + q : '')).then(x => x.json()).catch(() => null);
   return r;
