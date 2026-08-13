@@ -112,7 +112,7 @@ th { background: rgba(255,255,255,.04); color: var(--gold); font-weight: 600; }
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('stock')">🔍 个股分析</button>
   <button class="tab-btn" onclick="switchTab('market')">📈 大盘分析</button>
-  <button class="tab-btn" onclick="switchTab('compare')">⚖️ 对比分析</button>
+  <button class="tab-btn" onclick="switchTab('hot')">🔥 市场热榜</button>   <button class="tab-btn" onclick="switchTab('compare')">⚖️ 对比分析</button>
   <button class="tab-btn" onclick="switchTab('framework')">📖 框架速查</button>
 </div>
 
@@ -155,6 +155,20 @@ th { background: rgba(255,255,255,.04); color: var(--gold); font-weight: 600; }
     <canvas id="marketChart" style="width:100%;height:260px;background:#1c1c1c;border-radius:6px;display:block"></canvas>
   </div>
 </div>
+</div>
+
+
+<!-- 市场热榜页 -->
+<div id="tab-hot" class="tab-panel">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <button onclick="loadHotBoard()" class="tab-btn active" id="hotBtnBoard" style="flex:1">🏭 板块资金流入</button>
+    <button onclick="loadHotIndustry()" class="tab-btn" id="hotBtnIndustry" style="flex:1">📊 行业热度</button>
+    <button onclick="loadHotStock()" class="tab-btn" id="hotBtnStock" style="flex:1">⭐ 个股热度</button>
+    <button onclick="loadHotNews()" class="tab-btn" id="hotBtnNews" style="flex:1">📰 新闻利好TOP10</button>
+  </div>
+  <div id="loadingHot" style="display:none"><div class="spinner"></div><div style="text-align:center;color:var(--muted)">正在加载热榜数据…</div></div>
+  <div id="errorHot" style="display:none;color:var(--red);padding:12px;background:rgba(248,81,73,.1);border-radius:6px;margin-bottom:12px"></div>
+  <div id="resultHot"></div>
 </div>
 
 <!-- 对比分析页 -->
@@ -338,7 +352,7 @@ function stockIndustryOf(code, name) {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b => { if (b.textContent.includes({stock:'个股',market:'大盘',compare:'对比',framework:'框架'}[name])) b.classList.add('active'); });
+  document.querySelectorAll('.tab-btn').forEach(b => { if (b.textContent.includes({stock:'个股',market:'大盘',hot:'热榜',compare:'对比',framework:'框架'}[name])) b.classList.add('active'); });
   document.getElementById('tab-' + name).classList.add('active');
 }
 
@@ -377,7 +391,7 @@ async function getKline(code, years = 5) {
   const thisYear = new Date().getFullYear();
   for (let y = thisYear - years + 1; y <= thisYear; y++) {
     try {
-      // 指数代码转换：上证指数 000001 直用（同花顺 hs_000001），其余指数直用
+      // 指数代码转换：上证指数 000001 等直用6位代码；同花顺 line 接口对上证指数用 hs_000001（非 1A0001）
       const idxMap = { '000001': '000001', '000300': '000300', '000905': '000905', '000688': '000688' };
       const kCode = (idxMap[code] || code); // 指数映射 / 板块BK直用
       const r = await fetch('https://d.10jqka.com.cn/v4/line/hs_' + kCode + '/01/' + y + '.js', {
@@ -9119,7 +9133,7 @@ function calcJiuquTrend(klines) {
   else if (jiu9down) signal = '连续' + downCount + '根阴线 🔔 注意反弹机会';
   else signal = '暂无明确趋势信号，等待方向明确';
   // 纠错标准（九曲核心）：趋势破位即纠错止损
-  const stopLoss = aboveMA20 ? (curMA20 * 0.99).toFixed(2) : (curMA60 * 0.99).toFixed(2);
+  const stopLoss = +(aboveMA20 ? (curMA20 * 0.99).toFixed(2) : (curMA60 * 0.99).toFixed(2));
   return {
     curMA20: +curMA20.toFixed(2),
     curMA60: +curMA60.toFixed(2),
@@ -9142,9 +9156,8 @@ function calcJiuquTrend(klines) {
   };
 }
 
-// ============ 大盘分析 ============
-// 指数专用K线：东方财富push2his（数据准、格式确定）
-// GitHub Pages等纯前端环境通过CORS代理访问；localhost直连优先（更快）
+// ============ 大盘分析：指数K线多源策略 ============
+// ①东财push2his(最准,需CORS代理) → ②腾讯data.gtimg.cn(.js无跨域) → ③新浪JSONP → ④个股接口回退
 const CORS_PROXIES = [
   '',                                    // 0=直连(localhost/有后端时优先)
   'https://api.allorigins.win/raw?url=', // 1=免费CORS代理
@@ -9172,15 +9185,65 @@ async function getIndexKlineEM(code, years = 5) {
   if (!m) return null;
   return m[1].split(',').map(s=>s.replace(/&quot;/g,'"')).join(',').match(/"(\d{4}-\d{2}-\d{2})",[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+,[\d.]+/g) || [];
 }
+async function getIndexKlineTX(code, years = 3) {
+  const prefix = (code.startsWith('0')||code.startsWith('3')||code.startsWith('5')) ? 'sz' : 'sh';
+  const txCode = prefix + code;
+  return new Promise((resolve, reject) => {
+    const results = []; let done = 0; let timeoutId;
+    const curYear = new Date().getFullYear();
+    const urls = [`https://data.gtimg.cn/flashdata/hushen/latest/daily/${txCode}.js`];
+    for (let y = curYear; y >= curYear - years + 1 && y >= 24; y--)
+      urls.push(`https://data.gtimg.cn/flashdata/hushen/daily/${String(y).slice(-2)}/${txCode}.js`);
+    const finish = () => { clearTimeout(timeoutId); if (results.length > 0) resolve(results); else reject(new Error('腾讯K线为空')); };
+    timeoutId = setTimeout(() => { if (done < urls.length) finish(); }, 12000);
+    urls.forEach(url => {
+      const s = document.createElement('script');
+      s.onload = () => {
+        done++;
+        try {
+          if (window.latest_daily && Array.isArray(window.latest_daily)) { results.push(...window.latest_daily); delete window.latest_daily; }
+          else { for (const k of Object.keys(window)) { if ((k.startsWith('latest_')||k.startsWith('daily_'))&&Array.isArray(window[k])) { results.push(...window[k]); delete window[k]; break; } } }
+        } catch(e){/*ignore*/}
+        document.head.removeChild(s); if (done >= urls.length) finish();
+      };
+      s.onerror = () => { done++; if (done >= urls.length) finish(); };
+      s.src = url; document.head.appendChild(s);
+    });
+  }).then(raw => parseTXKlineData(raw));
+}
+function parseTXKlineData(arr) {
+  if (!arr || !arr.length) return [];
+  return arr.map(row => {
+    const d = typeof row === 'string' ? row.split(',') : row;
+    if (!d || d.length < 5) return null;
+    return { date:String(d[0]).replace(/^(\d{2})/,(y)=>((+y>30?'19':'20')+y)), open:+d[1], close:+d[2], high:+d[3], low:+d[4], volume:+(d[5]||0), amount:+(d[6]||0) };
+  }).filter(r=>r&&r.date&&r.close>0);
+}
+async function getIndexKlineSina(code, years = 3) {
+  const prefix = (code.startsWith('6')||code==='000001') ? 'sh' : 'sz';
+  return new Promise((resolve, reject) => {
+    const cb = '__sina_kline_'+Date.now();
+    window[cb] = function(data) {
+      delete window[cb]; document.head.removeChild(script);
+      if (data && Array.isArray(data)) resolve(data.map(d=>({date:d.day,open:+d.open,close:+d.close,high:+d.high,low:+d.low,volume:+(d.volume||0)})).filter(d=>d.date&&d.close>0));
+      else reject(new Error('新浪K线解析失败'));
+    };
+    const script = document.createElement('script');
+    script.src = `https://finance.sina.com.cn/realstock/company/${prefix}${code}/kline.shtml?symbol=${prefix}${code}&scale=1440&ma=no&datalen=${years*250}&callback=${cb}`;
+    script.onerror = ()=>{delete window[cb];reject(new Error('新浪K线失败'));};
+    document.head.appendChild(script);
+    setTimeout(()=>{if(window[cb]){delete window[cb];reject(new Error('新浪超时'));}},10000);
+  });
+}
 async function getIndexKline(code, years = 5) {
-  try {
-    const r = await getIndexKlineEM(code, years);
-    if (r && r.length) return r;
-  } catch(e) { console.warn('指数K线获取失败:', e.message); }
-  // 回退：尝试个股接口（部分指数代码在个股接口也有数据）
-  try { return await getKline(code, years); } catch(e2) {}
+  try { const r = await getIndexKlineEM(code, years); if (r && r.length) return r; } catch(e) {}
+  try { const r = await getIndexKlineTX(code, years); if (r && r.length) return r; } catch(e) {}
+  try { const r = await getIndexKlineSina(code, years); if (r && r.length) return r; } catch(e) {}
+  try { const r = await getKline(code, years); if (r && r.length) return r; } catch(e) {}
   return [];
 }
+
+// ============ 大盘分析 ============
 async function analyzeMarket(code) {
   let input = (code || $('marketInput').value || '000001').trim();
   // 支持指数/股票名称输入
@@ -9200,14 +9263,30 @@ async function analyzeMarket(code) {
   $('resultMarket').style.display = 'none'; $('errorMarket').style.display = 'none';
   $('loadingMarket').style.display = 'block';
   try {
-    // 指数也用同花顺K线（沪深指数 hs_000001）
     let klines = [];
-    const isBoard = BOARD_NAMES_KEYS.includes(input);
-    if (isBoard) {
-      klines = await getBoardKline(input, 3);
+    // 板块名（中文）→ 代码映射
+    const BOARD_ALIAS = { '半导体':'BK1036','机器人':'BK1039','机器人概念':'BK1039','通信设备':'BK0448','光伏':'BK0478','光伏设备':'BK0478','稀土永磁':'BK0728','军工':'BK0490','军工电子':'BK0490','计算机':'BK0447','计算机应用':'BK0447','中药':'BK1018','饮料':'BK0438','饮料制造':'BK0438','贵金属':'BK0732','小金属':'BK1023','基建':'BK0425','基础建设':'BK0425','光学':'BK0725','光学光电子':'BK0725','消费电子':'BK1033','电力':'BK0428','煤炭':'BK0437','电池':'BK1033','银行':'BK0475','房地产':'BK0451','房地产开发':'BK0451','医药':'BK0465','医疗器械':'BK0469','化学制药':'BK0464','白酒':'BK0896','证券':'BK0473','保险':'BK0474','汽车零部件':'BK0481','白色家电':'BK0500','有色金属':'BK0478','电力设备':'BK1034' };
+    // 1. 优先走Python数据服务
+    const isIndex = /^(000|399|899)/.test(input) || ['000001','399001','399006','000300','000905','000688'].includes(input);
+    const isBoard = input.startsWith('BK');
+    if (isBoard || BOARD_ALIAS[input]) {
+      const boardCode = isBoard ? input : BOARD_ALIAS[input];
+      const r = await fetch('http://localhost:8900/api/board_kline?code=' + boardCode + '&days=120').then(x => x.json()).catch(() => null);
+      if (r && r.ok && r.data && r.data.length) {
+        klines = r.data;
+      } else {
+        klines = await getBoardKline(boardCode, 3);
+      }
+    } else if (isIndex) {
+      const r = await fetch('http://localhost:8900/api/index_kline?code=' + input + '&days=120').then(x => x.json()).catch(() => null);
+      if (r && r.ok && r.data && r.data.length) {
+        klines = r.data;
+      } else {
+        klines = await getIndexKline(input, 3);
+      }
     } else {
-      // 指数优先走东财(代码格式确定)，失败回退同花顺——修复"大盘分析"长期取不到指数数据
-      klines = await getIndexKline(input, 3);
+      klines = await getKline(input, 1);
+      if (!klines.length) klines = await getIndexKline(input, 3);
     }
     if (!klines.length) { showError('errorMarket', '未获取到指数数据，请检查代码'); return; }
     const finance = [], quote = await getQuote(input).catch(() => null);
@@ -9216,7 +9295,7 @@ async function analyzeMarket(code) {
     const div = detectDivergence(klines, macd);
     const vol = analyzeVolume(klines);
     const score = scoreStock(trend, vol, finance, null);
-    // 徐小明多空通道（大盘版，与个股 calcXuxiaomingChannel 完全一致）
+    // 徐小明多空通道（大盘版）
     const mktChan = calcXuxiaomingChannel(klines);
     const jiuqu = calcJiuquTrend(klines);
     const last = klines[klines.length-1];
@@ -9229,9 +9308,9 @@ async function analyzeMarket(code) {
     };
     const suggestions = [
       { layer: '① 方向层', content: '大盘方向：' + trend.status + '。结合观澜方向层：关注成交量分级（2万亿及格/2.5万亿舒服/3万亿放大波动）与产业主线（科技/金融/周期轮动）。' },
-      { layer: '② 趋势层（九曲+徐小明）', content: '【九曲趋势】' + jiuqu.status + '。短期MA20=' + jiuqu.curMA20.toFixed(2) + '（现价' + (jiuqu.aboveMA20 ? '上方↑' : '下方↓') + '），长期MA60=' + jiuqu.curMA60.toFixed(2) + '（现价' + (jiuqu.aboveMA60 ? '上方↑' : '下方↓') + '）。' + jiuqu.signal + '【徐小明多空通道】短上轨=' + (mktChan.shortUpper[klines.length-1]||0).toFixed(2) + '（' + (klines[klines.length-1].close > mktChan.shortUpper[klines.length-1] ? '↗多方' : '↘空方') + '），短下轨=' + (mktChan.shortLower[klines.length-1]||0).toFixed(2) + '；长上轨=' + (mktChan.longUpper[klines.length-1]||0).toFixed(2) + '，长下轨=' + (mktChan.longLower[klines.length-1]||0).toFixed(2) + '。' },
-      { layer: '③ 结构层', content: (div.signals||[]).join('；') || '近期无明确背离结构。底部结构需60分钟以上周期确认。' + (jiuqu.jiu9up || jiuqu.jiu9down ? '（九转序列：连续' + Math.max(jiuqu.upCount||0, jiuqu.downCount||0) + '根同向K线，注意反转）' : '') },
-      { layer: '④ 点位层', content: '九曲通道：短期支撑 ' + jiuqu.curMA20.toFixed(2) + ' / 压力 ' + jiuqu.high20.toFixed(2) + '；长期支撑 ' + jiuqu.curMA60.toFixed(2) + ' / 压力 ' + jiuqu.high60.toFixed(2) + '。突破长期趋势（' + jiuqu.curMA60.toFixed(2) + '上方）加仓，破短期趋势（' + jiuqu.curMA20.toFixed(2) + '下方）减仓，纠错止损=' + jiuqu.stopLoss.toFixed(2) + '。' },
+      { layer: '② 趋势层（九曲+徐小明）', content: '【九曲趋势】' + jiuqu.status + '。短期MA20=' + jiuqu.curMA20.toFixed(2) + '（现价' + (jiuqu.aboveMA20 ? '上方↑' : '下方↓') + '），长期MA60=' + jiuqu.curMA60.toFixed(2) + '（现价' + (jiuqu.aboveMA60 ? '上方↑' : '下方↓') + '）。' + jiuqu.signal + '【徐小明多空通道】短上轨=' + (mktChan.shortUpper[klines.length-1]||0).toFixed(2) + '（' + (klines[klines.length-1].close > mktChan.shortUpper[klines.length-1] ? '↑多方' : '↓空方') + '），短下轨=' + (mktChan.shortLower[klines.length-1]||0).toFixed(2) + '；长上轨=' + (mktChan.longUpper[klines.length-1]||0).toFixed(2) + '，长下轨=' + (mktChan.longLower[klines.length-1]||0).toFixed(2) + '。' },
+      { layer: '③ 结构层', content: (div.signals||[]).join('；') || '近期无明显背离结构。底部结构需60分钟以上周期确认。' + (jiuqu.jiu9up || jiuqu.jiu9down ? '（九转序列：连续' + Math.max(jiuqu.upCount||0, jiuqu.downCount||0) + '根同向K线，注意反转）' : '') },
+      { layer: '④ 点位层', content: '九曲通道：短期支撑' + jiuqu.curMA20.toFixed(2) + ' / 压力 ' + jiuqu.high20.toFixed(2) + '；长期支撑' + jiuqu.curMA60.toFixed(2) + ' / 压力 ' + jiuqu.high60.toFixed(2) + '。突破长期趋势（' + jiuqu.curMA60.toFixed(2) + '上方）加仓，破短期趋势（' + jiuqu.curMA20.toFixed(2) + '下方）减仓，纠错止损=' + jiuqu.stopLoss.toFixed(2) + '。' },
       { layer: '⑤ 纪律层', content: '综合评分 ' + score.final + '分（' + score.verdict + '）。九曲纪律：双趋势之上可满仓、之下空仓；绝对止损浮亏10%；不加杠杆；大跌不恐慌、大涨不贪婪。' }
     ];
     setTimeout(() => drawMarketChart(klines, mktChan, 'marketChart'), 50);
@@ -9240,9 +9319,112 @@ async function analyzeMarket(code) {
   finally { $('loadingMarket').style.display = 'none'; }
 }
 
-// ══════════════════════════════════════════════════════
-// 大盘K线图（含徐小明多空通道，与个股 drawChart 算法一致 EMA26/89 四轨）
-// ══════════════════════════════════════════════════════
+// ============ 市场热榜（数据服务版） ============
+const DATA_SVC = 'http://localhost:8900/api/';
+async function hotFetch(cmd, params = {}) {
+  const q = Object.entries(params).map(([k,v]) => k + '=' + encodeURIComponent(v)).join('&');
+  const r = await fetch(DATA_SVC + cmd + (q ? '?' + q : '')).then(x => x.json()).catch(() => null);
+  return r;
+}
+function hotLoading(on) { $('loadingHot').style.display = on ? 'block' : 'none'; $('errorHot').style.display = 'none'; }
+function hotError(msg) { $('errorHot').style.display = 'block'; $('errorHot').textContent = '⚠️ ' + msg; }
+function hotBtn(active) {
+  ['Board','Industry','Stock','News'].forEach(k => {
+    const el = $('hotBtn' + k);
+    if (el) el.className = 'tab-btn' + (k === active ? ' active' : '');
+  });
+}
+// 1. 板块资金流入
+async function loadHotBoard() {
+  hotBtn('Board'); hotLoading(true);
+  const r = await hotFetch('board_fundflow');
+  if (!r || !r.ok) { hotLoading(false); hotError('板块资金数据获取失败，请确认数据服务已启动'); return; }
+  const data = (r.data || []).filter(d => d && d.name).slice(0, 10);
+  let html = '<div class="card"><h3>🏭 行业资金流入 TOP10（今日）</h3><table style="width:100%;border-collapse:collapse;font-size:0.92em">';
+  html += '<tr style="color:var(--muted)"><th style="text-align:left;padding:6px">行业</th><th>涨跌幅</th><th>净流入(亿)</th><th>主力净额(亿)</th></tr>';
+  data.forEach((d, i) => {
+    const net = parseFloat(d.net_inflow || 0) / 1e8;
+    const main = parseFloat(d.main_net || 0) / 1e8;
+    const chg = parseFloat(d.change_pct || 0);
+    const netCls = net >= 0 ? 'up' : 'down';
+    const chgCls = chg >= 0 ? 'up' : 'down';
+    html += '<tr style="border-top:1px solid var(--border)">';
+    html += '<td style="padding:6px">' + (i+1) + '. ' + d.name + '</td>';
+    html += '<td style="text-align:center;color:var(--' + chgCls + ')">' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
+    html += '<td style="text-align:center;color:var(--' + netCls + ')">' + (net >= 0 ? '+' : '') + net.toFixed(1) + '</td>';
+    html += '<td style="text-align:center;color:var(--' + (main >= 0 ? 'up' : 'down') + ')">' + (main >= 0 ? '+' : '') + main.toFixed(1) + '</td>';
+    html += '</tr>';
+  });
+  html += '</table><p style="color:var(--muted);font-size:0.82em;margin-top:8px">数据源：东财行业资金流（备用域名）· 点击行业名可在大盘页分析</p></div>';
+  $('resultHot').innerHTML = html;
+  hotLoading(false);
+}
+// 2. 行业热度（同花顺行业板块涨跌幅TOP）
+async function loadHotIndustry() {
+  hotBtn('Industry'); hotLoading(true);
+  const r = await hotFetch('board_rank');
+  if (!r || !r.ok) { hotLoading(false); hotError('行业热度数据获取失败'); return; }
+  const data = (r.data || []).filter(d => d && d.name).slice(0, 15);
+  let html = '<div class="card"><h3>📊 概念板块涨幅榜 TOP15（今日）</h3><table style="width:100%;border-collapse:collapse;font-size:0.92em">';
+  html += '<tr style="color:var(--muted)"><th style="text-align:left;padding:6px">排名</th><th style="text-align:left">概念</th><th>涨跌幅</th><th>净流入(亿)</th></tr>';
+  data.forEach((d, i) => {
+    const chg = parseFloat(d.change_pct || 0);
+    const net = parseFloat(d.net_inflow || 0) / 1e8;
+    const chgCls = chg >= 0 ? 'up' : 'down';
+    html += '<tr style="border-top:1px solid var(--border)"><td style="padding:6px">' + (i+1) + '</td>';
+    html += '<td>' + d.name + '</td>';
+    html += '<td style="text-align:center;color:var(--' + chgCls + ')">' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%</td>';
+    html += '<td style="text-align:center;color:var(--' + (net >= 0 ? 'up' : 'down') + ')">' + (net >= 0 ? '+' : '') + net.toFixed(1) + '</td></tr>';
+  });
+  html += '</table><p style="color:var(--muted);font-size:0.82em;margin-top:8px">数据源：东财概念板块（备用域名）</p></div>';
+  $('resultHot').innerHTML = html;
+  hotLoading(false);
+}
+// 3. 个股热度（雪球关注数TOP）
+async function loadHotStock() {
+  hotBtn('Stock'); hotLoading(true);
+  const r = await hotFetch('hot_xq');
+  if (!r || !r.ok) { hotLoading(false); hotError('个股热度数据获取失败'); return; }
+  const data = (r.data || []).slice(0, 15);
+  let html = '<div class="card"><h3>⭐ 个股关注热度 TOP15（雪球）</h3><table style="width:100%;border-collapse:collapse;font-size:0.92em">';
+  html += '<tr style="color:var(--muted)"><th style="text-align:left;padding:6px">排名</th><th style="text-align:left">股票</th><th style="text-align:right">关注人数</th><th style="text-align:right">最新价</th></tr>';
+  data.forEach((d, i) => {
+    html += '<tr style="border-top:1px solid var(--border)"><td style="padding:6px">' + (i+1) + '</td>';
+    html += '<td>' + d['股票简称'] + ' <span style="color:var(--muted);font-size:0.8em">' + d['股票代码'] + '</span></td>';
+    html += '<td style="text-align:right">' + (d['关注']||0).toLocaleString() + '</td>';
+    html += '<td style="text-align:right">' + d['最新价'] + '</td></tr>';
+  });
+  html += '</table><p style="color:var(--muted);font-size:0.82em;margin-top:8px">数据源：雪球热门讨论（akshare）</p></div>';
+  $('resultHot').innerHTML = html;
+  hotLoading(false);
+}
+// 4. 新闻利好度TOP10
+async function loadHotNews() {
+  hotBtn('News'); hotLoading(true);
+  const r = await hotFetch('news_positive_top');
+  if (!r || !r.ok) { hotLoading(false); hotError('新闻利好数据获取失败'); return; }
+  const data = r.data || [];
+  if (data.length && data[0].error) { hotLoading(false); hotError(data[0].error); return; }
+  let html = '<div class="card"><h3>📰 今日新闻利好度 TOP10</h3>';
+  html += '<p style="color:var(--muted);font-size:0.82em;margin-bottom:8px">模型：雪球热度前30候选 → 东财个股新闻 → 利好/利空词库评分（涨停+3/预增+3/减持-2…）</p>';
+  data.forEach((d, i) => {
+    const pos = d.total_score >= 0;
+    html += '<div style="padding:8px 0;border-top:1px solid var(--border)">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+    html += '<span><b>' + (i+1) + '. ' + d.name + '</b> <span style="color:var(--muted);font-size:0.8em">' + d.code + '</span></span>';
+    html += '<span style="color:var(--' + (pos ? 'green' : 'red') + ');font-weight:bold">' + (pos ? '+' : '') + d.total_score + '分</span></div>';
+    html += '<div style="color:var(--muted);font-size:0.82em;margin-top:4px">关注 ' + (d.hot||0).toLocaleString() + ' · 新闻 ' + d.news_count + ' 条</div>';
+    if (d.news && d.news.length) {
+      const first = d.news[0];
+      html += '<div style="font-size:0.85em;color:var(--text);margin-top:4px">📄 ' + first.title + ' <span style="color:var(--' + (first.score >= 0 ? 'green' : 'red') + ')">(' + (first.score >= 0 ? '+' : '') + first.score + ')</span></div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  $('resultHot').innerHTML = html;
+  hotLoading(false);
+}
+
 function drawMarketChart(klines, chan, canvasId) {
   const canvas = document.getElementById(canvasId);
   if (!canvas || !klines || klines.length < 10) return;
