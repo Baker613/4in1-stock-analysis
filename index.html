@@ -9291,6 +9291,27 @@ async function analyzeMarket(code) {
     }
     if (!klines.length) { showError('errorMarket', '未获取到指数数据，请检查代码'); return; }
     const finance = [], quote = await getQuote(input).catch(() => null);
+    // === 大盘当日K线合成（2026-08-14 修复：与个股一致，用腾讯实时行情补今日K线）===
+    if (quote && quote.price && quote.date) {
+      const qd = String(quote.date).replace(/[-/]/g, '');
+      const lastK = klines[klines.length - 1];
+      const todayStr = qd.substring(0, 8);
+      if (lastK && lastK.date !== todayStr) {
+        klines.push({
+          date: todayStr,
+          open: quote.open || lastK.close,
+          high: Math.max(quote.high || quote.price, quote.price, lastK.close),
+          low: Math.min(quote.low || quote.price, quote.price, lastK.close),
+          close: quote.price,
+          vol: quote.vol || 0,
+          amount: quote.amount || 0
+        });
+      } else if (lastK && lastK.date === todayStr && quote.price > 0) {
+        lastK.close = quote.price;
+        lastK.high = Math.max(quote.high || quote.price, quote.price, lastK.high);
+        lastK.low = Math.min(quote.low || quote.price, quote.price, lastK.low);
+      }
+    }
     const trend = analyzeTrend(klines);
     const macd = calcMACD(klines);
     const div = detectDivergence(klines, macd);
