@@ -139,7 +139,7 @@ th { background: rgba(255,255,255,.04); color: var(--gold); font-weight: 600; }
     <input type="text" id="marketInput" placeholder="输入指数代码或名称（000001 / 上证 / 中国电影）" maxlength="12">
     <button onclick="analyzeMarket()">📈 分析大盘</button>
   </div>
-  <div class="quick">快捷：<a onclick="analyzeMarket('000001')">上证指数</a><a onclick="analyzeMarket('399001')">深证成指</a><a onclick="analyzeMarket('399006')">创业板指</a><a onclick="analyzeMarket('000300')">沪深300</a><a onclick="analyzeMarket('000905')">中证500</a><a onclick="analyzeMarket('512880')">券商ETF</a><a onclick="analyzeMarket('510300')">沪深300ETF</a></div>
+  <div class="quick">快捷：<a onclick="analyzeMarket('1A0001')">上证指数</a><a onclick="analyzeMarket('399001')">深证成指</a><a onclick="analyzeMarket('399006')">创业板指</a><a onclick="analyzeMarket('000300')">沪深300</a><a onclick="analyzeMarket('000905')">中证500</a><a onclick="analyzeMarket('512880')">券商ETF</a><a onclick="analyzeMarket('510300')">沪深300ETF</a></div>
     <div class="quick">板块：<a onclick="analyzeMarket('半导体')">半导体</a><a onclick="analyzeMarket('机器人概念')">机器人</a><a onclick="analyzeMarket('通信设备')">通信设备</a><a onclick="analyzeMarket('光伏设备')">光伏</a><a onclick="analyzeMarket('稀土永磁')">稀土永磁</a><a onclick="analyzeMarket('军工电子')">军工</a><a onclick="analyzeMarket('计算机应用')">计算机</a><a onclick="analyzeMarket('中药')">中药</a><a onclick="analyzeMarket('饮料制造')">饮料</a><a onclick="analyzeMarket('贵金属')">贵金属</a><a onclick="analyzeMarket('小金属')">小金属</a><a onclick="analyzeMarket('基础建设')">基建</a><a onclick="analyzeMarket('光学光电子')">光学</a><a onclick="analyzeMarket('消费电子')">消费电子</a><a onclick="analyzeMarket('电力')">电力</a><a onclick="analyzeMarket('煤炭')">煤炭</a><a onclick="analyzeMarket('电池')">电池</a></div>
   <div class="quick">板块：
     <a onclick="analyzeMarket('BK0425')">半导体</a><a onclick="analyzeMarket('BK0491')">汽车零部件</a><a onclick="analyzeMarket('BK1039')">机器人概念</a><a onclick="analyzeMarket('BK0728')">稀土永磁</a><a onclick="analyzeMarket('BK0435')">军工</a><a onclick="analyzeMarket('BK0443')">医疗器械</a><a onclick="analyzeMarket('BK0445')">化学制药</a><a onclick="analyzeMarket('BK0450')">饮料制造</a><a onclick="analyzeMarket('BK0446')">电力</a><a onclick="analyzeMarket('BK0447')">银行</a><a onclick="analyzeMarket('BK0716')">小金属</a><a onclick="analyzeMarket('BK0477')">白色家电</a><a onclick="analyzeMarket('BK0732')">有色金属</a><a onclick="analyzeMarket('BK0460')">房地产开发</a><a onclick="analyzeMarket('BK0725')">光学光电子</a><a onclick="analyzeMarket('BK0500')">电力设备</a><a onclick="analyzeMarket('BK0426')">通信设备</a><a onclick="analyzeMarket('BK0482')">通用设备</a>
@@ -9267,7 +9267,8 @@ async function analyzeMarket(code) {
     // 板块名（中文）→ 代码映射
     const BOARD_ALIAS = { '半导体':'BK1036','机器人':'BK1039','机器人概念':'BK1039','通信设备':'BK0448','光伏':'BK0478','光伏设备':'BK0478','稀土永磁':'BK0728','军工':'BK0490','军工电子':'BK0490','计算机':'BK0447','计算机应用':'BK0447','中药':'BK1018','饮料':'BK0438','饮料制造':'BK0438','贵金属':'BK0732','小金属':'BK1023','基建':'BK0425','基础建设':'BK0425','光学':'BK0725','光学光电子':'BK0725','消费电子':'BK1033','电力':'BK0428','煤炭':'BK0437','电池':'BK1033','银行':'BK0475','房地产':'BK0451','房地产开发':'BK0451','医药':'BK0465','医疗器械':'BK0469','化学制药':'BK0464','白酒':'BK0896','证券':'BK0473','保险':'BK0474','汽车零部件':'BK0481','白色家电':'BK0500','有色金属':'BK0478','电力设备':'BK1034' };
     // 1. 优先走Python数据服务
-    const isIndex = /^(000|399|899)/.test(input) || ['000001','399001','399006','000300','000905','000688'].includes(input);
+    const INDEX_CODES = ['1A0001','399001','399006','000300','000905','000688','899001','899300'];
+    const isIndex = INDEX_CODES.includes(input) || (input.startsWith('1A') || input.startsWith('899') || input.startsWith('399'));
     const isBoard = input.startsWith('BK');
     if (isBoard || BOARD_ALIAS[input]) {
       const boardCode = isBoard ? input : BOARD_ALIAS[input];
@@ -9405,148 +9406,79 @@ async function loadHotIndustry() {
 // 3. 个股热度（雪球关注数TOP）
 async function loadHotStock() {
   hotBtn('Stock'); hotLoading(true);
-  const r = await hotFetch('hot_xq');
-  if (!r || !r.ok) { hotLoading(false); hotError('个股热度数据获取失败'); return; }
-  const data = (r.data || []).slice(0, 15);
-  let html = '<div class="card"><h3>⭐ 个股关注热度 TOP15（雪球）</h3><table style="width:100%;border-collapse:collapse;font-size:0.92em">';
-  html += '<tr style="color:var(--muted)"><th style="text-align:left;padding:6px">排名</th><th style="text-align:left">股票</th><th style="text-align:right">关注人数</th><th style="text-align:right">最新价</th></tr>';
-  data.forEach((d, i) => {
+  const [rRank, rThs] = await Promise.all([
+    hotFetch('hot_rank'),
+    hotFetch('hot_ths').catch(() => null)
+  ]);
+  const rankData = (rRank && rRank.ok) ? (rRank.data || []).slice(0, 20) : [];
+  const thsData = (rThs && rThs.ok) ? (rThs.data || []).slice(0, 10) : [];
+  if (!rankData.length) { hotLoading(false); hotError('数据获取失败'); return; }
+  let html = '<div class="card"><h3>🔥 个股热度 TOP20（东财人气榜·主）</h3>';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:0.92em">';
+  html += '<tr style="color:var(--muted)"><th style="text-align:left;padding:6px">排名</th><th style="text-align:left">股票</th><th style="text-align:right">最新价</th><th style="text-align:right">涨跌</th><th style="text-align:right">人气</th></tr>';
+  rankData.forEach((d, i) => {
+    var pct = parseFloat(d.change_pct);
+    var col = pct > 0 ? 'var(--up)' : pct < 0 ? 'var(--down)' : 'var(--muted)';
+    var arr = pct > 0 ? '↑' : pct < 0 ? '↓' : '';
     html += '<tr style="border-top:1px solid var(--border)"><td style="padding:6px">' + (i+1) + '</td>';
-    html += '<td>' + d['股票简称'] + ' <span style="color:var(--muted);font-size:0.8em">' + d['股票代码'] + '</span></td>';
-    html += '<td style="text-align:right">' + (d['关注']||0).toLocaleString() + '</td>';
-    html += '<td style="text-align:right">' + d['最新价'] + '</td></tr>';
+    html += '<td>' + (d.name||'') + ' <span style="color:var(--muted);font-size:0.8em">' + (d.code||'') + '</span></td>';
+    html += '<td style="text-align:right">' + (d.price||'--') + '</td>';
+    html += '<td style="text-align:right;color:' + col + '">' + arr + ' ' + (isNaN(pct)?'--':(pct>0?'+':'')+pct.toFixed(2)+'%') + '</td>';
+    html += '<td style="text-align:right;color:var(--muted)">' + (d.rank||'') + '</td></tr>';
   });
-  html += '</table><p style="color:var(--muted);font-size:0.82em;margin-top:8px">数据源：雪球热门讨论（akshare）</p></div>';
-  $('resultHot').innerHTML = html;
-  hotLoading(false);
+  html += '</table></div>';
+  if (thsData.length) {
+    html += '<div class="card" style="margin-top:12px"><h3>📈 同花顺连续上涨（强势）</h3>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:0.92em">';
+    html += '<tr style="color:var(--muted)"><th style="text-align:left;padding:6px">股票</th><th style="text-align:right">收盘价</th><th style="text-align:right">连涨天数</th><th style="text-align:right">累计涨幅</th><th style="text-align:right">行业</th></tr>';
+    thsData.forEach(function(d) {
+      var pct = parseFloat(d['连续涨幅'] || 0);
+      html += '<tr style="border-top:1px solid var(--border)"><td style="padding:6px">' + (d['股票简称']||'') + ' <span style="color:var(--muted);font-size:0.8em">' + (d['股票代码']||'') + '</span></td>';
+      html += '<td style="text-align:right">' + (d['收盘价']||'--') + '</td>';
+      html += '<td style="text-align:right">' + (d['连涨天数']||'--') + '天</td>';
+      html += '<td style="text-align:right;color:var(--up)">+' + pct.toFixed(2) + '%</td>';
+      html += '<td style="text-align:right;color:var(--muted)">' + (d['所属行业']||'') + '</td></tr>';
+    });
+    html += '</table></div>';
+  }
+  html += '<p style="color:var(--muted);font-size:0.8em;margin-top:8px">数据来源：东财人气榜(emappdata) + 同花顺连续上涨(akshare)</p>';
+  $('resultHot').innerHTML = html; hotLoading(false);
 }
-// 4. 新闻利好度TOP10
+
 async function loadHotNews() {
   hotBtn('News'); hotLoading(true);
-  const r = await hotFetch('news_positive_top');
+  var r = await hotFetch('news_positive_top');
   if (!r || !r.ok) { hotLoading(false); hotError('新闻利好数据获取失败'); return; }
-  const data = r.data || [];
-  if (data.length && data[0].error) { hotLoading(false); hotError(data[0].error); return; }
-  let html = '<div class="card"><h3>📰 今日新闻利好度 TOP10</h3>';
-  html += '<p style="color:var(--muted);font-size:0.82em;margin-bottom:8px">模型：雪球热度前30候选 → 东财个股新闻 → 利好/利空词库评分（涨停+3/预增+3/减持-2…）</p>';
-  data.forEach((d, i) => {
-    const pos = d.total_score >= 0;
-    html += '<div style="padding:8px 0;border-top:1px solid var(--border)">';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center">';
-    html += '<span><b>' + (i+1) + '. ' + d.name + '</b> <span style="color:var(--muted);font-size:0.8em">' + d.code + '</span></span>';
-    html += '<span style="color:var(--' + (pos ? 'green' : 'red') + ');font-weight:bold">' + (pos ? '+' : '') + d.total_score + '分</span></div>';
-    html += '<div style="color:var(--muted);font-size:0.82em;margin-top:4px">关注 ' + (d.hot||0).toLocaleString() + ' · 新闻 ' + d.news_count + ' 条</div>';
+  var data = r.data || [];
+  if (data.length && data[0] && data[0].error) { hotLoading(false); hotError(data[0].error); return; }
+  var html = '<div class="card"><h3>📰 今日全网新闻利好度 TOP10</h3>';
+  html += '<p style="color:var(--muted);font-size:0.82em;margin-bottom:8px">候选：东财人气榜+同花顺连涨+雪球 → 东财全网新闻（证券时报/财中社/红星资本局等） → 按利好新闻篇数排序</p>';
+  data.forEach(function(d, i) {
+    var pos = d.pos_count || 0;
+    var neg = d.neg_count || 0;
+    var score = d.total_score || 0;
+    var scol = score > 10 ? 'var(--up)' : score > 0 ? '#e6c84a' : score < 0 ? 'var(--down)' : 'var(--muted)';
+    html += '<div style="padding:10px 0;border-top:1px solid var(--border)">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline">';
+    html += '<span style="font-weight:bold;font-size:1.05em">' + (i+1) + '. ' + (d.name||'') + ' <span style="color:var(--muted);font-size:0.8em">' + (d.code||'') + '</span></span>';
+    html += '<span style="color:' + scol + ';font-weight:bold">利好+' + pos + '篇 利空-' + neg + '篇 总分=' + score + '</span></div>';
     if (d.news && d.news.length) {
-      const first = d.news[0];
-      html += '<div style="font-size:0.85em;color:var(--text);margin-top:4px">📄 ' + first.title + ' <span style="color:var(--' + (first.score >= 0 ? 'green' : 'red') + ')">(' + (first.score >= 0 ? '+' : '') + first.score + ')</span></div>';
+      d.news.slice(0, 3).forEach(function(n) {
+        var nc = n.score > 0 ? 'var(--up)' : n.score < 0 ? 'var(--down)' : 'var(--muted)';
+        var tag = n.score > 0 ? '利好' : (n.score < 0 ? '利空' : '中性');
+        html += '<div style="margin-top:4px;padding-left:12px;border-left:2px solid ' + nc + '">';
+        html += '<span style="color:' + nc + ';font-size:0.85em">' + tag + ' ' + n.score + '分</span> ';
+        html += '<span style="font-size:0.82em;color:var(--muted)">' + (n.title||'') + '</span>';
+        if (n.source) html += ' <span style="font-size:0.75em;color:var(--muted)">(' + (n.source||'') + ')</span>';
+        html += '</div>';
+      });
     }
     html += '</div>';
   });
-  html += '</div>';
-  $('resultHot').innerHTML = html;
-  hotLoading(false);
+  html += '<p style="color:var(--muted);font-size:0.8em;margin-top:8px">数据来源：东财全网新闻聚合 + 东财人气榜/同花顺连涨/雪球混合候选</p>';
+  $('resultHot').innerHTML = html; hotLoading(false);
 }
 
-function drawMarketChart(klines, chan, canvasId) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas || !klines || klines.length < 10) return;
-  const W = canvas.width = (canvas.parentElement ? canvas.parentElement.clientWidth : 800) || 800;
-  const H = 260;
-  canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  const padL = 10, padR = 75, padT = 8, padB = 20;
-  const n = klines.length;
-  const visN = Math.min(n, 120);
-  const starts = n - visN;
-
-  const allHigh = Math.max(...klines.slice(starts).map(k => k.high));
-  const allLow = Math.min(...klines.slice(starts).map(k => k.low));
-  const range = (allHigh - allLow) || 1;
-  const y = v => padT + (allHigh - v) / range * (H - padT - padB);
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#1c1c1c'; ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 0.5;
-  for (let i = 0; i < 5; i++) {
-    const ly = padT + i * (H - padT - padB) / 4;
-    ctx.beginPath(); ctx.moveTo(padL, ly); ctx.lineTo(W - padR, ly); ctx.stroke();
-  }
-
-  // 徐小明通道填充（与个股 drawChart 一致：C>短上轨红、C<短下轨绿）
-  const su = chan.shortUpper, sl = chan.shortLower;
-  const cwFull = (W - padL - padR) / visN;
-  for (let i = 0; i < visN; i++) {
-    const gi = starts + i, k = klines[gi];
-    const sy = y(su[gi] || 0), sly = y(sl[gi] || 0);
-    if (k.close > su[gi]) {
-      ctx.fillStyle = 'rgba(220,60,60,0.10)';
-      ctx.fillRect(padL + i * cwFull, Math.min(sy, sly), cwFull, Math.abs(sy - sly) + 1);
-    } else if (k.close < sl[gi]) {
-      ctx.fillStyle = 'rgba(50,200,80,0.10)';
-      ctx.fillRect(padL + i * cwFull, Math.min(sy, sly), cwFull, Math.abs(sy - sly) + 1);
-    }
-  }
-
-  // 均线 MA5/10/20
-  const ma5 = calcMA(klines.slice(starts), 5), ma10 = calcMA(klines.slice(starts), 10), ma20 = calcMA(klines.slice(starts), 20);
-  [[ma5, '#f5c518', 0.8], [ma10, '#b060d0', 0.8], [ma20, '#5090ff', 0.8]].forEach(([arr, color, lw]) => {
-    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = lw;
-    arr.forEach((v, i) => { const cx = padL + (i + 0.5) * cwFull; i === 0 ? ctx.moveTo(cx, y(v)) : ctx.lineTo(cx, y(v)); });
-    ctx.stroke();
-  });
-
-  // 徐小明四轨（标注最新值）
-  [['短上EMA26H', chan.shortUpper, '#ff6060', 1.2], ['短下EMA26L', chan.shortLower, '#40c040', 1.2], ['长上EMA89H', chan.longUpper, '#ff9090', 0.8], ['长下EMA89L', chan.longLower, '#60c060', 0.8]].forEach(([lbl, arr, color, lw]) => {
-    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = lw;
-    for (let i = 0; i < visN; i++) {
-      const gi = starts + i, v = arr[gi];
-      if (v === undefined) continue;
-      const cx = padL + (i + 0.5) * cwFull;
-      i === 0 ? ctx.moveTo(cx, y(v)) : ctx.lineTo(cx, y(v));
-    }
-    ctx.stroke();
-    const lastV = arr[n - 1];
-    if (lastV !== undefined) {
-      ctx.fillStyle = color; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left';
-      ctx.fillText(lbl + ':' + lastV.toFixed(1), W - padR + 2, y(lastV));
-    }
-  });
-
-  // K线蜡烛
-  const cw = cwFull * 0.75;
-  for (let i = 0; i < visN; i++) {
-    const k = klines[starts + i];
-    const cx = padL + (i + 0.5) * cwFull;
-    const color = k.close >= k.open ? '#e84040' : '#30c060';
-    ctx.strokeStyle = color; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(cx, y(k.high)); ctx.lineTo(cx, y(k.low)); ctx.stroke();
-    const bodyTop = y(Math.max(k.open, k.close)), bodyBot = y(Math.min(k.open, k.close));
-    ctx.fillStyle = color;
-    ctx.fillRect(cx - cw / 2, bodyTop, cw, Math.max(1, bodyBot - bodyTop));
-  }
-
-  // Y轴
-  ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
-  [allHigh, (allHigh + allLow) / 2, allLow].forEach((v, i) => ctx.fillText(v.toFixed(0), W - padR - 3, padT + i * (H - padT - padB) / 2 + 3));
-  // X轴日期
-  ctx.textAlign = 'center'; ctx.fillStyle = '#666'; ctx.font = '9px monospace';
-  const step = Math.max(1, Math.floor(visN / 6));
-  for (let i = 0; i < visN; i++) {
-    if (i % step === 0 || i === visN - 1) {
-      ctx.fillText(klines[starts + i].date.slice(5), padL + (i + 0.5) * cwFull, H - 4);
-    }
-  }
-  // 图例
-  ctx.font = '9px monospace'; ctx.textAlign = 'left';
-  const legends = [['短上轨EMA26H', '#ff6060'], ['短下轨EMA26L', '#40c040'], ['长上轨EMA89H', '#ff9090'], ['长下轨EMA89L', '#60c060'], ['MA5', '#f5c518'], ['MA10', '#b060d0'], ['MA20', '#5090ff']];
-  legends.forEach(([lbl, color], i) => {
-    const lx = padL + (i % 4) * 100, ly = H + 14 + Math.floor(i / 4) * 12;
-    ctx.fillStyle = color; ctx.fillRect(lx, ly - 9, 8, 8);
-    ctx.fillText(lbl, lx + 10, ly);
-  });
-}
-
-// ============ 对比分析 ============
 async function analyzeCompare() {
   const input = ($('compareInput').value || '600977,601225,000333').trim();
   const codes = input.split(/[,，\s]+/).filter(c => /^\d{6}$/.test(c)).slice(0, 10);
