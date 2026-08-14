@@ -9245,10 +9245,10 @@ async function getIndexKline(code, years = 5) {
 
 // ============ 大盘分析 ============
 async function analyzeMarket(code) {
-  let input = (code || $('marketInput').value || '000001').trim();
+  let input = (code || $('marketInput').value || '1A0001').trim();
   // 支持指数/股票名称输入
   if (!/^\d{6}$/.test(input)) {
-    const names = { '上证': '000001', '上证指数': '000001', '深成': '399001', '深证成指': '399001', '创业板': '399006', '创业板指': '399006', '沪深300': '000300', '中证500': '000905', '科创50': '000688', '券商': '512880' };
+    const names = { '上证': '1A0001', '上证指数': '1A0001', '深成': '399001', '深证成指': '399001', '创业板': '399006', '创业板指': '399006', '沪深300': '000300', '中证500': '000905', '科创50': '000688', '券商': '512880' };
     if (names[input]) { input = names[input]; }
     else {
       const nmInput = input.replace(/\s/g, '');
@@ -9272,14 +9272,14 @@ async function analyzeMarket(code) {
     const isBoard = input.startsWith('BK');
     if (isBoard || BOARD_ALIAS[input]) {
       const boardCode = isBoard ? input : BOARD_ALIAS[input];
-      const r = await fetch('http://localhost:8900/api/board_kline?code=' + boardCode + '&days=120').then(x => x.json()).catch(() => null);
+      const r = await fetch(DATA_SVC + 'board_kline?code=' + boardCode + '&days=120').then(x => x.json()).catch(() => null);
       if (r && r.ok && r.data && r.data.length) {
         klines = r.data;
       } else {
         klines = await getBoardKline(boardCode, 3);
       }
     } else if (isIndex) {
-      const r = await fetch('http://localhost:8900/api/index_kline?code=' + input + '&days=120').then(x => x.json()).catch(() => null);
+      const r = await fetch(DATA_SVC + 'index_kline?code=' + input + '&days=120').then(x => x.json()).catch(() => null);
       if (r && r.ok && r.data && r.data.length) {
         klines = r.data;
       } else {
