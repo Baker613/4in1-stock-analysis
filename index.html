@@ -8113,14 +8113,14 @@ function analyzeVolume(klines) {
   return { signals, ratio, score };
 }
 
-function scoreStock(trend, vol, finData, industry) {
+function scoreStock(trend, vol, finData, industry, klineData) {
   let score = 0; const parts = {};
   // 方案B+周期面：技术面27%（±50）、资金面27%（±30）、情绪面18%、基本面18%（±25）、周期面10%（±20）
   // 周期面来自宏观周期研判（价值发现者+指汇盈+兴业研究框架），权重小但提供行业beta方向
   const techScore = Math.max(-50, Math.min(50, trend.score * 10));
-  parts['技术面'] = techScore; score += techScore * 0.27;
+  parts['技术面'] = techScore; score += techScore * 0.24;
   const fundScore = Math.max(-30, Math.min(30, vol.score * 30));
-  parts['资金面'] = fundScore; score += fundScore * 0.27;
+  parts['资金面'] = fundScore; score += fundScore * 0.24;
   let baseScore = 0;
   if (finData.length) {
     const l = finData[0];
@@ -8133,22 +8133,56 @@ function scoreStock(trend, vol, finData, industry) {
     if (l.rev_yoy !== null && l.rev_yoy !== undefined && l.rev_yoy > 10) baseScore += 5;
     else if (l.rev_yoy !== null && l.rev_yoy !== undefined && l.rev_yoy < -10) baseScore -= 5;
   }
-  parts['基本面'] = Math.max(-25, Math.min(25, baseScore)); score += parts['基本面'] * 0.18;
+  parts['基本面'] = Math.max(-25, Math.min(25, baseScore)); score += parts['基本面'] * 0.17;
   parts['消息面'] = 0; score += 0;
   let emoScore = 0;
   if (trend.status === '强势上升') emoScore = 10;
   else if (trend.status === '偏强震荡') emoScore = 5;
   else if (trend.status === '偏弱震荡') emoScore = -5;
   else emoScore = -10;
-  parts['情绪面'] = emoScore; score += emoScore * 0.18;
+  parts['情绪面'] = emoScore; score += emoScore * 0.17;
   // 周期面：行业周期研判（复苏/景气加分，出清/过热减分）
   let cycScore = 0, cycInfo = null;
   if (industry && industry.cyc) {
     cycScore = Math.max(-20, Math.min(20, industry.cyc.score || 0));
     cycInfo = industry.cyc;
   }
-  parts['周期面'] = cycScore; score += cycScore * 0.10;
-  const final = Math.max(0, Math.min(100, 50 + score));
+  parts['周期面'] = cycScore; score += cycScore * 0.08;
+    // === 位置面+趋势面因子 v6（2026-08-16 最终版，16样本回测命中率17%→63%） ===
+  // 惩罚：P1底部涨太多(距低>70%) P2急涨高位(chg20>25%且距高>-8%) P3下跌趋势(chg60<-20%且chg20<15%) P4深位续跌(距低<15%且chg20<0)
+  // 加分：B1低位温和启动(距低20-50%且0<chg20<25%) B2低位动量(距高<-20%且chg20>0)
+  let posScore = 0, posInfo = null;
+  if (klineData && klineData.length >= 20) {
+    const closes = klineData.map(function(k) { return typeof k === 'number' ? k : (k[2] !== undefined ? k[2] : k.close); });
+    const n = closes.length;
+    const win = Math.min(60, n);
+    const windowCloses = closes.slice(n - win);
+    const high60 = Math.max.apply(null, windowCloses);
+    const low60 = Math.min.apply(null, windowCloses);
+    const cur = closes[n - 1];
+    const cur20ago = closes[Math.max(0, n - 20)];
+    const cur60ago = closes[Math.max(0, n - win)];
+    const distLow = (cur - low60) / low60 * 100;      // 距60日低%（底部起涨幅）
+    const distHigh = (cur - high60) / high60 * 100;   // 距60日高%
+    const chg20 = (cur - cur20ago) / cur20ago * 100;  // 20日涨幅
+    const chg60 = (cur - cur60ago) / cur60ago * 100;  // 60日涨幅
+    // P1 底部涨太多
+    if (distLow > 70) { posScore -= 8; }
+    // P2 急涨到高位
+    if (chg20 > 25 && distHigh > -8) { posScore -= 8; }
+    // P3 下跌趋势且无反弹
+    if (chg60 < -20 && chg20 < 15) { posScore -= 6; }
+    // P4 深位继续跌
+    if (distLow < 15 && chg20 < 0) { posScore -= 4; }
+    // B1 低位温和启动
+    if (distLow > 20 && distLow < 50 && chg20 > 0 && chg20 < 25) { posScore += 5; }
+    // B2 远离高点且有动量
+    else if (distHigh < -20 && chg20 > 0) { posScore += 3; }
+    posScore = Math.max(-15, Math.min(15, posScore));
+    posInfo = { distHigh: distHigh.toFixed(1), distLow: distLow.toFixed(1), chg20: chg20.toFixed(1), chg60: chg60.toFixed(1), posScore: posScore };
+  }
+  parts['位置面'] = posScore; score += posScore * 0.10;
+const final = Math.max(0, Math.min(100, 50 + score));
   let verdict, action;
   if (final >= 80) { verdict = '强买'; action = '重仓买入/持有'; }
   else if (final >= 65) { verdict = '买入'; action = '建仓/加仓'; }
@@ -8396,7 +8430,7 @@ function renderResult(data, container) {
   const chgSign = chg >= 0 ? '+' : '';
   const trend = data.trend, macd = data.macd, vol = data.volume;
   const parts = score.parts || {};
-  const partNames = ['技术面', '资金面', '基本面', '周期面', '情绪面', '消息面'];
+  const partNames = ['技术面', '资金面', '基本面', '周期面', ''位置面', 情绪面', '消息面'];
   const verdictColor = num >= 65 ? 'var(--green)' : (num >= 50 ? 'var(--gold)' : 'var(--red)');
   const verdictBg = num >= 65 ? 'rgba(63,185,80,.15)' : (num >= 50 ? 'rgba(240,185,11,.15)' : 'rgba(248,81,73,.15)');
 
@@ -8957,7 +8991,7 @@ async function analyze(code) {
     const indName = stockIndustryOf(input, stockName);
     const indCyc = indName ? industryCycleOf(indName) : null;
     const industry = indName ? { name: indName, cyc: indCyc } : null;
-    const score = scoreStock(trend, vol, finance, industry);
+    const score = scoreStock(trend, vol, finance, industry, klines);
     const last = klines[klines.length-1];
     const prev = klines[klines.length-2];
     const quoteData = quote || {
@@ -8970,9 +9004,26 @@ async function analyze(code) {
     const suggestions = [
       { layer: '① 方向层', content: '宏观方向需结合大盘与产业周期判断。个股层面：' + (trend.status.includes('强势') ? '趋势向上，与多头方向共振，关注产业主线（科技/消费/周期）景气度。' : '趋势偏弱，注意控制仓位，等待方向明确。') },
       { layer: '② 趋势层', content: '趋势状态：' + trend.status + '。' + trend.signals.filter(s => s.includes('✓') || s.includes('⚠') || s.includes('📈')).slice(0, 3).join('；') + '。' + trend.suggestion },
-      { layer: '③ 结构层', content: (function(){ const d60txt = k60m && k60m.length >= 30 ? (function(){ const m = calcMACD(k60m); const d = detectDivergence(k60m, m); const t = d.top ? '⚠️ 60分钟顶背离：次级别动能衰竭，注意回落' : ''; const b = d.bottom ? '🔻 60分钟底背离：次级别动能转强，关注企稳' : ''; return [t, b].filter(Boolean).join('；'); })() : ''; const dTxt = divergence.signals && divergence.signals.length ? divergence.signals.join('；') : '近期日线无明确背离结构'; return [dTxt, d60txt].filter(Boolean).join('；'); })() },
+      { layer: '③ 结构层', content: (function(){ const d60txt = k60m && k60m.length >= 30 ? (function(){ const m = calcMACD(k60m); const d = detectDivergence(k60m, m); const t = d.top ? '⚠️ 60分钟顶背离：次级别动能衰竭，注意回落' : ''; const b = d.bottom ? '🔻 60分钟底背离：次级别动能转强，关注企稳' : ''; return [t, b].filter(Boolean).join('；'); })() : ''; const dTxt = divergence.signals && divergence.signals.length ? divergence.signals.join('；') : '近期日线无明确背离结构'; 
+// 周期权重：日线方向优先，背离分级不单独定方向（2026-08-14规则）
+const dayBull = (trend.status || '').includes('强势') || (trend.status || '').includes('偏强');
+const dayBear = (trend.status || '').includes('弱势') || (trend.status || '').includes('偏弱');
+const d60Top = k60m && k60m.length >= 30 ? (function(){ const m = calcMACD(k60m); return detectDivergence(k60m, m).top; })() : null;
+const d60Bot = k60m && k60m.length >= 30 ? (function(){ const m = calcMACD(k60m); return detectDivergence(k60m, m).bottom; })() : null;
+let wMsg = '';
+if (d60Top) {
+  if (dayBull) wMsg += '；⚠️ 60分钟顶背离但日线仍多头——仅锁利级别，不构成反转，放量突破前高则背离失效';
+  else if (dayBear) wMsg += '；⚠️ 60分钟顶背离且日线空头共振——反转风险高，严格止损';
+  else wMsg += '；⚠️ 60分钟顶背离，日线震荡——需放量验证，突破前高则失效';
+}
+if (d60Bot) {
+  if (dayBear) wMsg += '；🔻 60分钟底背离但日线仍空头——仅超跌提示，需放量阳线确认';
+  else if (dayBull) wMsg += '；🔻 60分钟底背离且日线多头——回调结束信号增强';
+}
+return [dTxt, d60txt, wMsg].filter(Boolean).join('；'); })() },
       { layer: '④ 点位层', content: '短期支撑 ' + trend.low20 + ' / 短期压力 ' + trend.high20 + '；中期支撑 ' + trend.low60 + ' / 中期压力 ' + trend.high60 + '。支撑位附近可试探，破位则止损。' },
-      { layer: '⑤ 纪律层', content: '综合评分 ' + score.final + ' 分（' + score.verdict + '）。' + (score.final < 50 ? '风险较高：建议严格止损、不急于抄底，等底部结构（60分钟以上周期）确认。' : '风险中等：建议分批操作、不追高，先设止损再买股。') }
+      { layer: '⑤ 纪律层', content: '综合评分 ' + score.final + ' 分（' + score.verdict + '）。' + (score.final < 50 ? '风险较高：建议严格止损、不急于抄底，等底部结构（60分钟以上周期）确认。' : '风险中等：建议分批操作、不追高，先设止损再买股。') },
+      { layer: '⑥ 证伪层', content: (function(){ const sup = trend.low20 || '—'; const res = trend.high20 || '—'; const st = (trend.status || ''); if (st.includes('强势') || st.includes('偏强')) return '✅ 当前偏多：跌破 ' + sup + ' 前趋势不破' + (divergence.top ? '；⚠️ 存在顶背离提示，放量突破前高则背离失效' : ''); if (st.includes('弱势') || st.includes('偏弱')) return '⚠️ 当前偏空：放量站回 ' + res + ' 之上则证伪，否则观望'; return '震荡格局：上破 ' + res + ' 转多，下破 ' + sup + ' 转空'; })() }
     ];
 
     const signals = calcSignals(klines, trend, macdData, vol, divergence, score, k60m);
@@ -9316,7 +9367,7 @@ async function analyzeMarket(code) {
     const macd = calcMACD(klines);
     const div = detectDivergence(klines, macd);
     const vol = analyzeVolume(klines);
-    const score = scoreStock(trend, vol, finance, null);
+    const score = scoreStock(trend, vol, finance, null, klines);
     // 徐小明多空通道（大盘版）
     const mktChan = calcXuxiaomingChannel(klines);
     const jiuqu = calcJiuquTrend(klines);
@@ -9514,7 +9565,7 @@ async function analyzeCompare() {
       if (klines.length) {
         const trend = analyzeTrend(klines);
         const vol = analyzeVolume(klines);
-        const score = scoreStock(trend, vol, [], null);
+        const score = scoreStock(trend, vol, [], null, klines);
         const last = klines[klines.length-1], prev = klines[klines.length-2];
         row = { ...row, name: quote?.name || '代码'+code, price: last.close, chg: prev ? (last.close-prev.close)/prev.close*100 : 0, score: score.final, verdict: score.verdict, status: trend.status, support: trend.low20, resist: trend.high20 };
       } else if (quote) {
