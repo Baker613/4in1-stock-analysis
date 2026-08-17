@@ -8430,7 +8430,7 @@ function renderResult(data, container) {
   const chgSign = chg >= 0 ? '+' : '';
   const trend = data.trend, macd = data.macd, vol = data.volume;
   const parts = score.parts || {};
-  const partNames = ['技术面', '资金面', '基本面', '周期面', ''位置面', 情绪面', '消息面'];
+  const partNames = ['技术面', '资金面', '基本面', '周期面', '位置面', '情绪面', '消息面'];
   const verdictColor = num >= 65 ? 'var(--green)' : (num >= 50 ? 'var(--gold)' : 'var(--red)');
   const verdictBg = num >= 65 ? 'rgba(63,185,80,.15)' : (num >= 50 ? 'rgba(240,185,11,.15)' : 'rgba(248,81,73,.15)');
 
