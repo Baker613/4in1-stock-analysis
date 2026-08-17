@@ -8118,9 +8118,9 @@ function scoreStock(trend, vol, finData, industry, klineData) {
   // 方案B+周期面：技术面27%（±50）、资金面27%（±30）、情绪面18%、基本面18%（±25）、周期面10%（±20）
   // 周期面来自宏观周期研判（价值发现者+指汇盈+兴业研究框架），权重小但提供行业beta方向
   const techScore = Math.max(-50, Math.min(50, trend.score * 10));
-  parts['技术面'] = techScore; score += techScore * 0.24;
+  parts['技术面'] = techScore; score += techScore * 0.19;
   const fundScore = Math.max(-30, Math.min(30, vol.score * 30));
-  parts['资金面'] = fundScore; score += fundScore * 0.24;
+  parts['资金面'] = fundScore; score += fundScore * 0.19;
   let baseScore = 0;
   if (finData.length) {
     const l = finData[0];
@@ -8133,24 +8133,24 @@ function scoreStock(trend, vol, finData, industry, klineData) {
     if (l.rev_yoy !== null && l.rev_yoy !== undefined && l.rev_yoy > 10) baseScore += 5;
     else if (l.rev_yoy !== null && l.rev_yoy !== undefined && l.rev_yoy < -10) baseScore -= 5;
   }
-  parts['基本面'] = Math.max(-25, Math.min(25, baseScore)); score += parts['基本面'] * 0.17;
+  parts['基本面'] = Math.max(-25, Math.min(25, baseScore)); score += parts['基本面'] * 0.15;
   parts['消息面'] = 0; score += 0;
   let emoScore = 0;
   if (trend.status === '强势上升') emoScore = 10;
   else if (trend.status === '偏强震荡') emoScore = 5;
   else if (trend.status === '偏弱震荡') emoScore = -5;
   else emoScore = -10;
-  parts['情绪面'] = emoScore; score += emoScore * 0.17;
+  parts['情绪面'] = emoScore; score += emoScore * 0.12;
   // 周期面：行业周期研判（复苏/景气加分，出清/过热减分）
   let cycScore = 0, cycInfo = null;
   if (industry && industry.cyc) {
     cycScore = Math.max(-20, Math.min(20, industry.cyc.score || 0));
     cycInfo = industry.cyc;
   }
-  parts['周期面'] = cycScore; score += cycScore * 0.08;
-    // === 位置面+趋势面因子 v6（2026-08-16 最终版，16样本回测命中率17%→63%） ===
-  // 惩罚：P1底部涨太多(距低>70%) P2急涨高位(chg20>25%且距高>-8%) P3下跌趋势(chg60<-20%且chg20<15%) P4深位续跌(距低<15%且chg20<0)
-  // 加分：B1低位温和启动(距低20-50%且0<chg20<25%) B2低位动量(距高<-20%且chg20>0)
+  parts['周期面'] = cycScore; score += cycScore * 0.07;
+    // === 位置面+趋势面因子 v8.6（2026-08-16 终极版：位置权重0.28+高位门控） ===
+  // 回测：8/8评分组命中50%、8/14新闻组命中100%；高位强势4只全降级、低位启动3只全命中
+  // 核心：位置面权重0.28，强势上升+贴高点直接门控-12（高位强势=冲顶风险非买入信号）
   let posScore = 0, posInfo = null;
   if (klineData && klineData.length >= 20) {
     const closes = klineData.map(function(k) { return typeof k === 'number' ? k : (k[2] !== undefined ? k[2] : k.close); });
@@ -8166,22 +8166,27 @@ function scoreStock(trend, vol, finData, industry, klineData) {
     const distHigh = (cur - high60) / high60 * 100;   // 距60日高%
     const chg20 = (cur - cur20ago) / cur20ago * 100;  // 20日涨幅
     const chg60 = (cur - cur60ago) / cur60ago * 100;  // 60日涨幅
-    // P1 底部涨太多
-    if (distLow > 70) { posScore -= 8; }
-    // P2 急涨到高位
-    if (chg20 > 25 && distHigh > -8) { posScore -= 8; }
-    // P3 下跌趋势且无反弹
-    if (chg60 < -20 && chg20 < 15) { posScore -= 6; }
-    // P4 深位继续跌
-    if (distLow < 15 && chg20 < 0) { posScore -= 4; }
-    // B1 低位温和启动
-    if (distLow > 20 && distLow < 50 && chg20 > 0 && chg20 < 25) { posScore += 5; }
-    // B2 远离高点且有动量
-    else if (distHigh < -20 && chg20 > 0) { posScore += 3; }
-    posScore = Math.max(-15, Math.min(15, posScore));
-    posInfo = { distHigh: distHigh.toFixed(1), distLow: distLow.toFixed(1), chg20: chg20.toFixed(1), chg60: chg60.toFixed(1), posScore: posScore };
+    const isLimitUp = chg20 > 40 && distLow > 60;      // 连续涨停主升特例（只限罚-8）
+    if (isLimitUp) { posScore -= 8; }
+    else {
+      if (distHigh > -8 && chg20 > 25) posScore -= 15;   // 急涨高位
+      if (distLow > 70) posScore -= 10;                   // 从底部涨太多
+      if (distHigh > -8 && trend.status === '强势上升') posScore -= 8; // 高位强势=冲顶
+    }
+    if (chg60 < -20 && chg20 < 15) posScore -= 8;        // 下跌趋势且无反弹
+    if (distLow < 15 && chg20 < 0) posScore -= 6;        // 深位续跌
+    if (distLow > 30 && distLow < 55 && chg60 < 0 && chg20 < 10 && distHigh > -20) posScore -= 5; // 反弹充分
+    // 加分（低位启动优先）
+    if (distHigh < -20 && distLow < 50 && chg20 > 25) posScore += 10;  // 急拉启动
+    else if (distHigh < -10 && distLow < 40 && chg20 > 8 && chg20 < 25 && chg60 > 5) posScore += 8; // 低位启动
+    else if (distHigh < -20 && chg20 > 0 && chg60 > 0) posScore += 5;   // 低位动量
+    posScore = Math.max(-25, Math.min(25, posScore));
+    // 状态门控：强势上升+贴高点 → 直接降级
+    const gate = (trend.status === '强势上升' && distHigh > -8) ? -12 : 0;
+    posScore += gate;
+    posInfo = { distHigh: distHigh.toFixed(1), distLow: distLow.toFixed(1), chg20: chg20.toFixed(1), chg60: chg60.toFixed(1), posScore: posScore, gate: gate };
   }
-  parts['位置面'] = posScore; score += posScore * 0.10;
+  parts['位置面'] = posScore; score += posScore * 0.28;
 const final = Math.max(0, Math.min(100, 50 + score));
   let verdict, action;
   if (final >= 80) { verdict = '强买'; action = '重仓买入/持有'; }
